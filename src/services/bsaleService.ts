@@ -1,5 +1,3 @@
-import fetch from 'node-fetch';
-
 const BSALE_BASE_URL = 'https://api.bsale.io/v1';
 const TOKEN = process.env.BSALE_ACCESS_TOKEN || '';
 
