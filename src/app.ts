@@ -142,11 +142,11 @@ app.post('/api/credit-notes/:id/pay', async (req, res) => {
 app.get('/api/products', async (_req, res) => {
   try {
     const result = await pool.query(`
-      SELECT r.sku, r.product_name, SUM(r.quantity_remaining) as total_stock,
+      SELECT r.sku, MAX(r.product_name) as product_name, SUM(r.quantity_remaining) as total_stock,
              COUNT(r.id) as receptions, MAX(r.synced_at) as last_sync
       FROM receptions r
       GROUP BY r.sku
-      ORDER BY r.product_name
+      ORDER BY product_name
     `);
     res.json(result.rows);
   } catch (e: any) {
