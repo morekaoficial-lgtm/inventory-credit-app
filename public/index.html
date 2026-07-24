@@ -324,10 +324,10 @@ async function loadCreditNotes() {
         <td>${n.id}</td>
         <td>${n.product_name} <br><small>${n.sku}</small></td>
         <td>#${n.reception_id}</td>
-        <td>$${n.old_cost.toFixed(2)}</td>
-        <td>$${n.new_cost.toFixed(2)}</td>
+        <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
+        <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
         <td>${n.quantity_credited}</td>
-        <td class="credit-positive">$${n.amount.toFixed(2)}</td>
+        <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
         <td><button class="success" onclick="payCredit(${n.id})">Pagar</button></td>
       </tr>`;
     }
