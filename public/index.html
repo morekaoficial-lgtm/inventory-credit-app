@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestion de Inventario y Notas de Credito</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f7fa; color: #333; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+/* Header */
+header { background: #1a365d; color: white; padding: 20px; margin-bottom: 20px; }
+header h1 { font-size: 1.5rem; }
+header p { opacity: 0.8; font-size: 0.9rem; }
+
+/* Cards */
+.card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.card h2 { font-size: 1.1rem; color: #2c5282; margin-bottom: 15px; border-left: 4px solid #3182ce; padding-left: 10px; }
+
+/* Stats */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px; }
+.stat-card { background: white; border-radius: 8px; padding: 20px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.stat-card .number { font-size: 2rem; font-weight: bold; color: #2c5282; }
+.stat-card .label { color: #718096; font-size: 0.9rem; }
+
+/* Forms */
+.form-group { margin-bottom: 15px; }
+.form-group label { display: block; margin-bottom: 5px; font-weight: 600; font-size: 0.9rem; }
+input, select, button { padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 5px; font-size: 0.95rem; }
+input, select { width: 100%; }
+button { background: #3182ce; color: white; border: none; cursor: pointer; font-weight: 600; }
+button:hover { background: #2c5282; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.success { background: #38a169; }
+button.danger { background: #e53e3e; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th { background: #2c5282; color: white; padding: 10px; text-align: left; font-weight: 600; }
+td { padding: 10px; border-bottom: 1px solid #e2e8f0; }
+tr:hover { background: #f7fafc; }
+
+/* Alerts */
+.alert { padding: 12px 15px; border-radius: 5px; margin-bottom: 15px; }
+.alert-info { background: #ebf8ff; color: #2c5282; }
+.alert-success { background: #f0fff4; color: #276749; }
+.alert-error { background: #fed7d7; color: #c53030; }
+
+/* Sections */
+.section { display: none; }
+.section.active { display: block; }
+
+/* Nav */
+.nav { display: flex; gap: 5px; margin-bottom: 20px; flex-wrap: wrap; }
+.nav button { background: #edf2f7; color: #4a5568; }
+.nav button.active { background: #3182ce; color: white; }
+
+/* Credit note row */
+.credit-positive { color: #e53e3e; font-weight: bold; }
+.credit-zero { color: #718096; }
+
+/* Loading */
+.loading { text-align: center; padding: 20px; color: #718096; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .stats { grid-template-columns: 1fr 1fr; }
+  table { font-size: 0.8rem; }
+  th, td { padding: 6px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <h1>Gestion de Inventario FIFO</h1>
+    <p>Notas de Credito por Baja de Precio — Bsale Integration</p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Stats -->
+  <div class="stats" id="stats">
+    <div class="stat-card"><div class="number" id="stat-products">-</div><div class="label">Productos</div></div>
+    <div class="stat-card"><div class="number" id="stat-receptions">-</div><div class="label">Recepciones</div></div>
+    <div class="stat-card"><div class="number" id="stat-pending">-</div><div class="label">NC Pendientes</div></div>
+    <div class="stat-card"><div class="number" id="stat-amount">-</div><div class="label">Monto Pendiente</div></div>
+  </div>
+
+  <!-- Navigation -->
+  <div class="nav">
+    <button class="active" onclick="showSection('products')">Productos</button>
+    <button onclick="showSection('sync')">Sincronizar</button>
+    <button onclick="showSection('credit')">Notas de Credito</button>
+    <button onclick="showSection('upload')">Subir PDF</button>
+  </div>
+
+  <!-- Products Section -->
+  <div id="section-products" class="section active">
+    <div class="card">
+      <h2>Productos Sincronizados</h2>
+      <div id="products-list">
+        <div class="loading">Cargando productos...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sync Section -->
+  <div id="section-sync" class="section">
+    <div class="card">
+      <h2>Sincronizar Producto desde Bsale</h2>
+      <div class="form-group">
+        <label>SKU del producto</label>
+        <input type="text" id="sync-sku" placeholder="Ej: BOCMORNEG405" value="BOCMORNEG405">
+      </div>
+      <button onclick="syncProduct()">Sincronizar</button>
+      <div id="sync-result"></div>
+    </div>
+
+    <div class="card">
+      <h2>Calcular Nota de Credito</h2>
+      <div class="form-group">
+        <label>SKU</label>
+        <input type="text" id="calc-sku" placeholder="Ej: BOCMORNEG405">
+      </div>
+      <div class="form-group">
+        <label>Nuevo Precio ($)</label>
+        <input type="number" id="calc-price" placeholder="35.00" step="0.01">
+      </div>
+      <button onclick="calculateCredit()">Calcular</button>
+      <div id="calc-result"></div>
+    </div>
+  </div>
+
+  <!-- Credit Notes Section -->
+  <div id="section-credit" class="section">
+    <div class="card">
+      <h2>Notas de Credito Pendientes</h2>
+      <div id="credit-list">
+        <div class="loading">Cargando...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Section -->
+  <div id="section-upload" class="section">
+    <div class="card">
+      <h2>Subir PDF de Proveedor</h2>
+      <div class="form-group">
+        <label>Seleccionar PDF</label>
+        <input type="file" id="pdf-file" accept=".pdf">
+      </div>
+      <div class="form-group">
+        <label>Proveedor (opcional)</label>
+        <input type="text" id="pdf-supplier" placeholder="Nombre del proveedor">
+      </div>
+      <button onclick="uploadPdf()">Subir PDF</button>
+      <div id="upload-result"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = window.location.origin + '/api';
+
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('section-' + name).classList.add('active');
+  event.target.classList.add('active');
+
+  if (name === 'products') loadProducts();
+  if (name === 'credit') loadCreditNotes();
+}
+
+async function loadStats() {
+  try {
+    const res = await fetch(API + '/stats');
+    const data = await res.json();
+    document.getElementById('stat-products').textContent = data.totalProducts || 0;
+    document.getElementById('stat-receptions').textContent = data.totalReceptions || 0;
+    document.getElementById('stat-pending').textContent = data.countPending || 0;
+    document.getElementById('stat-amount').textContent = '$' + (data.totalPending || 0).toFixed(2);
+  } catch (e) {
+    console.error('Stats error:', e);
+  }
+}
+
+async function loadProducts() {
+  try {
+    const res = await fetch(API + '/products');
+    const products = await res.json();
+    const container = document.getElementById('products-list');
+    if (products.length === 0) {
+      container.innerHTML = '<div class="alert alert-info">No hay productos sincronizados. Ve a "Sincronizar" para agregar.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>SKU</th><th>Producto</th><th>Stock</th><th>Recepciones</th><th>Ult. Sync</th><th>Accion</th></tr></thead><tbody>';
+    for (const p of products) {
+      html += `<tr>
+        <td><code>${p.sku}</code></td>
+        <td>${p.product_name}</td>
+        <td>${p.total_stock}</td>
+        <td>${p.receptions}</td>
+        <td>${new Date(p.last_sync).toLocaleDateString()}</td>
+        <td><button onclick="viewProduct('${p.sku}')">Ver</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    document.getElementById('products-list').innerHTML = '<div class="alert alert-error">Error cargando productos</div>';
+  }
+}
+
+async function syncProduct() {
+  const sku = document.getElementById('sync-sku').value.trim();
+  if (!sku) return alert('Ingresa un SKU');
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Sincronizando...';
+
+  try {
+    const res = await fetch(API + '/sync/' + encodeURIComponent(sku), { method: 'POST' });
+    const data = await res.json();
+    const div = document.getElementById('sync-result');
+    if (res.ok) {
+      div.innerHTML = `<div class="alert alert-success">
+        <strong>${data.productName}</strong> sincronizado.<br>
+        Stock: ${data.stock} unidades | Recepciones: ${data.receptions}
+      </div>`;
+      loadStats();
+    } else {
+      div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
+    }
+  } catch (e) {
+    document.getElementById('sync-result').innerHTML = '<div class="alert alert-error">Error de conexion</div>';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Sincronizar';
+}
+
+async function calculateCredit() {
+  const sku = document.getElementById('calc-sku').value.trim();
+  const price = parseFloat(document.getElementById('calc-price').value);
+  if (!sku || !price || price <= 0) return alert('Ingresa SKU y precio valido');
+
+  try {
+    const res = await fetch(API + '/calculate/' + encodeURIComponent(sku), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newPrice: price })
+    });
+    const data = await res.json();
+    const div = document.getElementById('calc-result');
+
+    if (!res.ok) {
+      div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
+      return;
+    }
+
+    let html = `<div class="alert alert-info">
+      <strong>${data.productName}</strong> — Precio nuevo: $${data.newPrice}<br>
+      <strong>Total NC: $${data.totalAmount.toFixed(2)}</strong>
+    </div>`;
+
+    html += '<table><thead><tr><th>Recepcion</th><th>Costo Original</th><th>Cantidad</th><th>Diferencia</th><th>Subtotal</th></tr></thead><tbody>';
+    for (const note of data.creditNotes) {
+      const diff = note.oldCost - note.newCost;
+      const subtotal = diff * note.quantity;
+      html += `<tr>
+        <td>#${note.receptionId}</td>
+        <td>$${note.oldCost.toFixed(2)}</td>
+        <td>${note.quantity}</td>
+        <td class="credit-positive">-$${diff.toFixed(2)}</td>
+        <td class="credit-positive">$${subtotal.toFixed(2)}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+
+    html += `<button class="success" onclick='saveCreditNotes(${JSON.stringify(data.creditNotes).replace(/'/g, "&#39;")})'>Guardar Notas de Credito</button>`;
+    div.innerHTML = html;
+  } catch (e) {
+    document.getElementById('calc-result').innerHTML = '<div class="alert alert-error">Error calculando</div>';
+  }
+}
+
+async function saveCreditNotes(notes) {
+  try {
+    const res = await fetch(API + '/credit-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`Guardadas ${data.count} notas de credito`);
+      document.getElementById('calc-result').innerHTML = '<div class="alert alert-success">Notas de credito guardadas. Ve a "Notas de Credito" para pagar.</div>';
+      loadStats();
+    }
+  } catch (e) {
+    alert('Error guardando');
+  }
+}
+
+async function loadCreditNotes() {
+  try {
+    const res = await fetch(API + '/credit-notes');
+    const notes = await res.json();
+    const container = document.getElementById('credit-list');
+    if (notes.length === 0) {
+      container.innerHTML = '<div class="alert alert-info">No hay notas de credito pendientes.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Accion</th></tr></thead><tbody>';
+    for (const n of notes) {
+      html += `<tr>
+        <td>${n.id}</td>
+        <td>${n.product_name} <br><small>${n.sku}</small></td>
+        <td>#${n.reception_id}</td>
+        <td>$${n.old_cost.toFixed(2)}</td>
+        <td>$${n.new_cost.toFixed(2)}</td>
+        <td>${n.quantity_credited}</td>
+        <td class="credit-positive">$${n.amount.toFixed(2)}</td>
+        <td><button class="success" onclick="payCredit(${n.id})">Pagar</button></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    document.getElementById('credit-list').innerHTML = '<div class="alert alert-error">Error cargando NC</div>';
+  }
+}
+
+async function payCredit(id) {
+  if (!confirm('Marcar como pagada?')) return;
+  try {
+    await fetch(API + '/credit-notes/' + id + '/pay', { method: 'POST' });
+    loadCreditNotes();
+    loadStats();
+  } catch (e) {
+    alert('Error');
+  }
+}
+
+async function uploadPdf() {
+  const fileInput = document.getElementById('pdf-file');
+  const supplier = document.getElementById('pdf-supplier').value;
+  if (!fileInput.files[0]) return alert('Selecciona un PDF');
+
+  const formData = new FormData();
+  formData.append('pdf', fileInput.files[0]);
+  if (supplier) formData.append('supplier', supplier);
+
+  try {
+    const res = await fetch(API + '/upload-pdf', { method: 'POST', body: formData });
+    const data = await res.json();
+    const div = document.getElementById('upload-result');
+    if (data.success) {
+      div.innerHTML = `<div class="alert alert-success">
+        PDF subido: ${data.filename}<br>
+        Paginas: ${data.pages}<br>
+        <small>Preview: ${data.textPreview.slice(0, 5).join(', ')}...</small>
+      </div>`;
+    } else {
+      div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
+    }
+  } catch (e) {
+    document.getElementById('upload-result').innerHTML = '<div class="alert alert-error">Error subiendo PDF</div>';
+  }
+}
+
+async function viewProduct(sku) {
+  document.getElementById('calc-sku').value = sku;
+  showSection('sync');
+}
+
+// Init
+loadStats();
+loadProducts();
+</script>
+
+</body>
+</html>
