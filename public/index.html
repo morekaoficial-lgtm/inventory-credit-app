@@ -349,7 +349,7 @@ async function loadCreditNotes() {
       container.innerHTML = '<div class="alert alert-info">No hay notas de credito pendientes.</div>';
       return;
     }
-    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Accion</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>';
     for (const n of notes) {
       html += `<tr>
         <td>${n.id}</td>
@@ -359,7 +359,10 @@ async function loadCreditNotes() {
         <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
         <td>${n.quantity_credited}</td>
         <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
-        <td><button class="success" onclick="payCredit(${n.id})">Pagar</button></td>
+        <td>
+          <button class="success" onclick="payCredit(${n.id})">Pagar</button>
+          <button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="margin-left:5px;">📥 Reporte</button>
+        </td>
       </tr>`;
     }
     html += '</tbody></table>';
@@ -378,7 +381,7 @@ async function loadPaymentHistory() {
       container.innerHTML = '<div class="alert alert-info">No hay pagos realizados aun.</div>';
       return;
     }
-    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>SKU</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Fecha Pago</th><th>Recepcion</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>SKU</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Fecha Pago</th><th>Acciones</th></tr></thead><tbody>';
     for (const n of notes) {
       html += `<tr>
         <td>${n.id}</td>
@@ -389,7 +392,9 @@ async function loadPaymentHistory() {
         <td>${n.quantity_credited}</td>
         <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
         <td>${new Date(n.paid_at).toLocaleDateString()}</td>
-        <td>${n.document_number || '#'+n.reception_id}</td>
+        <td>
+          <button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="margin-left:5px;">📥 Reporte</button>
+        </td>
       </tr>`;
     }
     html += '</tbody></table>';
@@ -399,7 +404,10 @@ async function loadPaymentHistory() {
   }
 }
 
-let lastReportData = null;
+function downloadReport(sku, newPrice) {
+  const url = API + '/report/' + encodeURIComponent(sku) + '/excel?newPrice=' + newPrice;
+  window.open(url, '_blank');
+}
 let lastReportSku = '';
 let lastReportPrice = 0;
 
