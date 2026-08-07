@@ -349,12 +349,13 @@ async function loadCreditNotes() {
       container.innerHTML = '<div class="alert alert-info">No hay notas de credito pendientes.</div>';
       return;
     }
-    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion (INV-)</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>';
     for (const n of notes) {
+      const docNumber = n.document_number ? `<strong>${n.document_number}</strong>` : `<span style="color:#e53e3e">Sin INV - Re-sync</span>`;
       html += `<tr>
         <td>${n.id}</td>
         <td>${n.product_name} <br><small>${n.sku}</small></td>
-        <td>#${n.reception_id}</td>
+        <td>${docNumber}</td>
         <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
         <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
         <td>${n.quantity_credited}</td>
@@ -433,16 +434,42 @@ async function generateReport() {
     lastReportData = data;
 
     let html = '<div class="alert alert-success"><strong>Reporte generado</strong></div>';
+    
+    // Warning si faltan document_number (necesita re-sync)
+    if (!data.ultimaRcPrecioViejo && data.stockViejo > 0) {
+      html += '<div class="alert alert-error" style="margin-top:10px;"><strong>⚠️ Re-sincronizacion requerida:</strong> Este producto fue sincronizado antes de la actualizacion. Ve a "Sincronizar" y sincroniza de nuevo para ver los numeros de orden (INV-).</div>';
+    }
+    
     html += '<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
     html += `<tr><td><strong>Producto</strong></td><td>${data.producto}</td></tr>`;
-    html += `<tr><td>Primera RC Precio Nuevo</td><td>${data.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
-    html += `<tr><td>Fecha Primera RC</td><td>${data.fechaPrimeraRc || 'N/A'}</td></tr>`;
-    html += `<tr><td>Stock Nuevo</td><td>${data.stockNuevo}</td></tr>`;
+    
+    // Primera RC al precio nuevo
+    if (data.primeraRcPrecioNuevo) {
+      html += `<tr><td>Primera RC con Precio Nuevo</td><td><strong>${data.primeraRcPrecioNuevo}</strong></td></tr>`;
+      html += `<tr><td>Fecha Primera RC</td><td>${data.fechaPrimeraRc}</td></tr>`;
+    } else if (data.stockNuevo > 0) {
+      html += `<tr><td>Primera RC con Precio Nuevo</td><td>Sin numero de orden</td></tr>`;
+      html += `<tr><td>Fecha Primera RC</td><td>${data.fechaPrimeraRc || 'N/A'}</td></tr>`;
+    } else {
+      html += `<tr><td>Primera RC con Precio Nuevo</td><td><em>No hay recepciones a $${data.precioNuevo.toFixed(2)}</em></td></tr>`;
+      html += `<tr><td>Fecha Primera RC</td><td>-</td></tr>`;
+    }
+    
+    html += `<tr><td>Stock Nuevo</td><td>${data.stockNuevo} unidades</td></tr>`;
     html += `<tr><td>Precio Nuevo</td><td>$${data.precioNuevo.toFixed(2)}</td></tr>`;
-    html += `<tr><td>Ultima RC Precio Viejo</td><td>${data.ultimaRcPrecioViejo || 'N/A'}</td></tr>`;
+    
+    // Ultima RC al precio viejo
+    if (data.ultimaRcPrecioViejo) {
+      html += `<tr><td>Ultima RC con Precio Viejo</td><td><strong>${data.ultimaRcPrecioViejo}</strong></td></tr>`;
+    } else if (data.stockViejo > 0) {
+      html += `<tr><td>Ultima RC con Precio Viejo</td><td><span style="color:#e53e3e">Sin numero de orden - Re-sincronizar</span></td></tr>`;
+    } else {
+      html += `<tr><td>Ultima RC con Precio Viejo</td><td><em>No hay stock al precio viejo</em></td></tr>`;
+    }
+    
     html += `<tr><td>Fecha Ultima RC</td><td>${data.fechaUltimaRc || 'N/A'}</td></tr>`;
     html += `<tr><td>Precio Viejo</td><td>${data.precioViejo !== null ? '$' + data.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
-    html += `<tr><td>Stock Viejo</td><td>${data.stockViejo}</td></tr>`;
+    html += `<tr><td>Stock Viejo</td><td>${data.stockViejo} unidades</td></tr>`;
     html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${data.diferenciaUnitaria !== null ? '$' + data.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
     html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${data.totalNotaCredito !== null ? '$' + data.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
     html += '</tbody></table>';
