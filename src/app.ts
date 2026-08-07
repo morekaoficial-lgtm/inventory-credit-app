@@ -46,18 +46,19 @@ app.post('/api/sync/:sku', async (req, res) => {
 
     const productName = await bsale.getProductName(variant.product.id);
     const stock = await bsale.getStock(variant.id);
-    const costs = await bsale.getCosts(variant.id);
+    const costs = await bsale.getCostsWithDocumentNumbers(variant.id);
 
     for (const item of costs.history) {
       const detailId = item.reception_detail?.id || 0;
       await pool.query(`
-        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, synced_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
         ON CONFLICT (id) DO UPDATE SET
           quantity_remaining = EXCLUDED.quantity_remaining,
           original_cost = EXCLUDED.original_cost,
+          document_number = EXCLUDED.document_number,
           synced_at = CURRENT_TIMESTAMP
-      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate]);
+      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null]);
     }
 
     res.json({

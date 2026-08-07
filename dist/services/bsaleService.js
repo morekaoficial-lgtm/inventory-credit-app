@@ -4,6 +4,9 @@ exports.bsaleFetch = bsaleFetch;
 exports.getVariantBySku = getVariantBySku;
 exports.getStock = getStock;
 exports.getCosts = getCosts;
+exports.extractReceptionId = extractReceptionId;
+exports.getReceptionDocumentNumber = getReceptionDocumentNumber;
+exports.getCostsWithDocumentNumbers = getCostsWithDocumentNumbers;
 exports.getProductName = getProductName;
 exports.formatBsaleDate = formatBsaleDate;
 const BSALE_BASE_URL = 'https://api.bsale.io/v1';
@@ -27,6 +30,33 @@ async function getStock(variantId, officeId = 2) {
 }
 async function getCosts(variantId) {
     return bsaleFetch(`/variants/${variantId}/costs.json`);
+}
+// Extrae el receptionId del href de reception_detail
+// href: https://api.bsale.io/v1/stocks/receptions/16514/details/31820.json
+function extractReceptionId(href) {
+    const match = href.match(/\/receptions\/(\d+)\/details\//);
+    return match ? parseInt(match[1]) : null;
+}
+async function getReceptionDocumentNumber(receptionId) {
+    try {
+        const data = await bsaleFetch(`/stocks/receptions/${receptionId}.json`);
+        return data.documentNumber || null;
+    }
+    catch {
+        return null;
+    }
+}
+async function getCostsWithDocumentNumbers(variantId) {
+    const costs = await getCosts(variantId);
+    const history = await Promise.all(costs.history.map(async (item) => {
+        const receptionId = extractReceptionId(item.reception_detail.href);
+        if (receptionId) {
+            const documentNumber = await getReceptionDocumentNumber(receptionId);
+            return { ...item, documentNumber };
+        }
+        return item;
+    }));
+    return { ...costs, history };
 }
 async function getProductName(productId) {
     const data = await bsaleFetch(`/products/${productId}.json`);

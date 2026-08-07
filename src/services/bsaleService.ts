@@ -6,6 +6,7 @@ export interface BsaleCost {
   admissionDate: number;
   cost: number;
   availableFifo: number;
+  documentNumber?: string | null;
 }
 
 export interface BsaleCostsResponse {
@@ -36,6 +37,39 @@ export async function getStock(variantId: number, officeId = 2): Promise<any | n
 
 export async function getCosts(variantId: number): Promise<BsaleCostsResponse> {
   return bsaleFetch(`/variants/${variantId}/costs.json`);
+}
+
+// Extrae el receptionId del href de reception_detail
+// href: https://api.bsale.io/v1/stocks/receptions/16514/details/31820.json
+export function extractReceptionId(href: string): number | null {
+  const match = href.match(/\/receptions\/(\d+)\/details\//);
+  return match ? parseInt(match[1]) : null;
+}
+
+export async function getReceptionDocumentNumber(receptionId: number): Promise<string | null> {
+  try {
+    const data = await bsaleFetch(`/stocks/receptions/${receptionId}.json`);
+    return data.documentNumber || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getCostsWithDocumentNumbers(variantId: number): Promise<BsaleCostsResponse> {
+  const costs = await getCosts(variantId);
+  
+  const history: BsaleCost[] = await Promise.all(
+    costs.history.map(async (item) => {
+      const receptionId = extractReceptionId(item.reception_detail.href);
+      if (receptionId) {
+        const documentNumber = await getReceptionDocumentNumber(receptionId);
+        return { ...item, documentNumber };
+      }
+      return item;
+    })
+  );
+  
+  return { ...costs, history };
 }
 
 export async function getProductName(productId: string): Promise<string> {
