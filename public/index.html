@@ -95,6 +95,8 @@ tr:hover { background: #f7fafc; }
     <button class="active" onclick="showSection('products')">Productos</button>
     <button onclick="showSection('sync')">Sincronizar</button>
     <button onclick="showSection('credit')">Notas de Credito</button>
+    <button onclick="showSection('report')">Reporte NC</button>
+    <button onclick="showSection('history')">Historial Pagos</button>
     <button onclick="showSection('upload')">Subir PDF</button>
   </div>
 
@@ -145,6 +147,34 @@ tr:hover { background: #f7fafc; }
     </div>
   </div>
 
+  <!-- Report Section -->
+  <div id="section-report" class="section">
+    <div class="card">
+      <h2>Generar Reporte de Nota de Credito</h2>
+      <div class="form-group">
+        <label>SKU del producto</label>
+        <input type="text" id="report-sku" placeholder="Ej: BOCMORNEG405">
+      </div>
+      <div class="form-group">
+        <label>Nuevo Precio ($)</label>
+        <input type="number" id="report-price" placeholder="90.00" step="0.01">
+      </div>
+      <button onclick="generateReport()">Generar Reporte</button>
+      <button class="success" onclick="downloadReportExcel()" id="btn-download-excel" style="display:none; margin-left: 10px;">📥 Descargar Excel</button>
+      <div id="report-result"></div>
+    </div>
+  </div>
+
+  <!-- Payment History Section -->
+  <div id="section-history" class="section">
+    <div class="card">
+      <h2>Historial de Pagos — Notas de Credito Pagadas</h2>
+      <div id="history-list">
+        <div class="loading">Cargando historial...</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Upload Section -->
   <div id="section-upload" class="section">
     <div class="card">
@@ -175,6 +205,7 @@ function showSection(name) {
 
   if (name === 'products') loadProducts();
   if (name === 'credit') loadCreditNotes();
+  if (name === 'history') loadPaymentHistory();
 }
 
 async function loadStats() {
@@ -336,6 +367,90 @@ async function loadCreditNotes() {
   } catch (e) {
     document.getElementById('credit-list').innerHTML = '<div class="alert alert-error">Error cargando NC</div>';
   }
+}
+
+async function loadPaymentHistory() {
+  try {
+    const res = await fetch(API + '/credit-notes/paid');
+    const notes = await res.json();
+    const container = document.getElementById('history-list');
+    if (notes.length === 0) {
+      container.innerHTML = '<div class="alert alert-info">No hay pagos realizados aun.</div>';
+      return;
+    }
+    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>SKU</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Fecha Pago</th><th>Recepcion</th></tr></thead><tbody>';
+    for (const n of notes) {
+      html += `<tr>
+        <td>${n.id}</td>
+        <td>${n.product_name}</td>
+        <td><code>${n.sku}</code></td>
+        <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
+        <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
+        <td>${n.quantity_credited}</td>
+        <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
+        <td>${new Date(n.paid_at).toLocaleDateString()}</td>
+        <td>${n.document_number || '#'+n.reception_id}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    document.getElementById('history-list').innerHTML = '<div class="alert alert-error">Error cargando historial</div>';
+  }
+}
+
+let lastReportData = null;
+let lastReportSku = '';
+let lastReportPrice = 0;
+
+async function generateReport() {
+  const sku = document.getElementById('report-sku').value.trim();
+  const price = parseFloat(document.getElementById('report-price').value);
+  if (!sku || !price || price <= 0) return alert('Ingresa SKU y precio valido');
+
+  lastReportSku = sku;
+  lastReportPrice = price;
+
+  try {
+    const res = await fetch(API + '/report/' + encodeURIComponent(sku) + '?newPrice=' + price);
+    const data = await res.json();
+    const div = document.getElementById('report-result');
+
+    if (!res.ok) {
+      div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
+      document.getElementById('btn-download-excel').style.display = 'none';
+      return;
+    }
+
+    lastReportData = data;
+
+    let html = '<div class="alert alert-success"><strong>Reporte generado</strong></div>';
+    html += '<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
+    html += `<tr><td><strong>Producto</strong></td><td>${data.producto}</td></tr>`;
+    html += `<tr><td>Primera RC Precio Nuevo</td><td>${data.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
+    html += `<tr><td>Fecha Primera RC</td><td>${data.fechaPrimeraRc || 'N/A'}</td></tr>`;
+    html += `<tr><td>Stock Nuevo</td><td>${data.stockNuevo}</td></tr>`;
+    html += `<tr><td>Precio Nuevo</td><td>$${data.precioNuevo.toFixed(2)}</td></tr>`;
+    html += `<tr><td>Ultima RC Precio Viejo</td><td>${data.ultimaRcPrecioViejo || 'N/A'}</td></tr>`;
+    html += `<tr><td>Fecha Ultima RC</td><td>${data.fechaUltimaRc || 'N/A'}</td></tr>`;
+    html += `<tr><td>Precio Viejo</td><td>${data.precioViejo !== null ? '$' + data.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
+    html += `<tr><td>Stock Viejo</td><td>${data.stockViejo}</td></tr>`;
+    html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${data.diferenciaUnitaria !== null ? '$' + data.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
+    html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${data.totalNotaCredito !== null ? '$' + data.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
+    html += '</tbody></table>';
+
+    div.innerHTML = html;
+    document.getElementById('btn-download-excel').style.display = 'inline-block';
+  } catch (e) {
+    document.getElementById('report-result').innerHTML = '<div class="alert alert-error">Error generando reporte</div>';
+    document.getElementById('btn-download-excel').style.display = 'none';
+  }
+}
+
+function downloadReportExcel() {
+  if (!lastReportSku || !lastReportPrice) return;
+  const url = API + '/report/' + encodeURIComponent(lastReportSku) + '/excel?newPrice=' + lastReportPrice;
+  window.open(url, '_blank');
 }
 
 async function payCredit(id) {

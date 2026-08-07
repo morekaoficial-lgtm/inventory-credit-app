@@ -219,6 +219,22 @@ app.get('/api/credit-notes', async (_req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+// Get paid credit notes (history)
+app.get('/api/credit-notes/paid', async (_req, res) => {
+    try {
+        const result = await database_1.pool.query(`
+      SELECT cn.*, r.document_number, r.admission_date
+      FROM credit_notes cn
+      JOIN receptions r ON r.id = cn.reception_id
+      WHERE cn.status = 'paid'
+      ORDER BY cn.created_at DESC
+    `);
+        res.json(result.rows);
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 // Mark as paid
 app.post('/api/credit-notes/:id/pay', async (req, res) => {
     try {
