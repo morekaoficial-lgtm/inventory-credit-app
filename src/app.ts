@@ -3,9 +3,11 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import multer from 'multer';
+import * as XLSX from 'xlsx';
 import { initDatabase, pool } from './config/database';
 import * as bsale from './services/bsaleService';
 import * as credit from './services/creditNoteService';
+import * as report from './services/reportService';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -101,6 +103,70 @@ app.post('/api/calculate/:sku', async (req, res) => {
 
     const result = credit.calculateCreditNotes(stockItems, newPrice);
     res.json({ sku, productName: stockItems[0]?.productName, newPrice, creditNotes: result.creditNotes, totalAmount: result.totalAmount, currency: 'USD' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Generate credit report (JSON)
+app.get('/api/report/:sku', async (req, res) => {
+  try {
+    const { sku } = req.params;
+    const newPrice = parseFloat(req.query.newPrice as string);
+    if (!newPrice || newPrice <= 0) return res.status(400).json({ error: 'newPrice query param requerido y mayor a 0' });
+
+    const result = await report.generateCreditReport(sku, newPrice);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Generate credit report (Excel download)
+app.get('/api/report/:sku/excel', async (req, res) => {
+  try {
+    const { sku } = req.params;
+    const newPrice = parseFloat(req.query.newPrice as string);
+    if (!newPrice || newPrice <= 0) return res.status(400).json({ error: 'newPrice query param requerido y mayor a 0' });
+
+    const result = await report.generateCreditReport(sku, newPrice);
+
+    // Build worksheet
+    const wsData = [
+      ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Stock Nuevo', 'Precio nuevo',
+       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Precio Viejo', 'Stock Viejo',
+       'Diferencia unitaria', 'Total de nota de credito'],
+      [
+        result.producto,
+        result.primeraRcPrecioNuevo || '',
+        result.fechaPrimeraRc || '',
+        result.stockNuevo,
+        result.precioNuevo,
+        result.ultimaRcPrecioViejo || '',
+        result.fechaUltimaRc || '',
+        result.precioViejo ?? '',
+        result.stockViejo,
+        result.diferenciaUnitaria ?? '',
+        result.totalNotaCredito ?? '',
+      ],
+    ];
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+      { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', `attachment; filename="reporte_nota_credito_${sku}_${newPrice}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
