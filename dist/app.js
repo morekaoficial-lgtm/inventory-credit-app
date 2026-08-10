@@ -121,36 +121,43 @@ app.post('/api/sync/:sku', async (req, res) => {
 // Update office_name for all existing receptions (bulk)
 app.post('/api/sync/update-offices', async (_req, res) => {
     try {
-        // Get all unique variant_ids from receptions
-        const variantsResult = await database_1.pool.query(`
-      SELECT DISTINCT variant_id FROM receptions WHERE variant_id IS NOT NULL
+        // Get all unique SKUs from receptions
+        const skusResult = await database_1.pool.query(`
+      SELECT DISTINCT sku FROM receptions WHERE sku IS NOT NULL AND sku != ''
     `);
-        const variantIds = variantsResult.rows.map((r) => r.variant_id);
+        const skus = skusResult.rows.map((r) => r.sku);
         let updated = 0;
         let errors = 0;
-        for (const variantId of variantIds) {
+        let notFound = 0;
+        for (const sku of skus) {
             try {
+                // Find variant in Bsale
+                const variant = await bsale.getVariantBySku(sku);
+                if (!variant) {
+                    notFound++;
+                    continue; // Skip SKUs not found in Bsale
+                }
                 // Get stock to find office
-                const stock = await bsale.getStock(variantId);
+                const stock = await bsale.getStock(variant.id);
                 const officeId = stock?.office?.id || 2;
                 let officeName = stock?.office?.name || null;
                 if (!officeName) {
                     const office = await bsale.getOffice(officeId);
                     officeName = office?.name || `Sucursal ${officeId}`;
                 }
-                // Update all receptions for this variant
+                // Update all receptions for this SKU (and set variant_id too)
                 const result = await database_1.pool.query(`
           UPDATE receptions 
-          SET office_id = $1, office_name = $2 
-          WHERE variant_id = $3
-        `, [officeId, officeName, variantId]);
+          SET office_id = $1, office_name = $2, variant_id = $3
+          WHERE sku = $4
+        `, [officeId, officeName, variant.id, sku]);
                 updated += result.rowCount || 0;
             }
             catch (e) {
                 errors++;
             }
         }
-        res.json({ success: true, updated, errors, total: variantIds.length });
+        res.json({ success: true, updated, errors, notFound, total: skus.length });
     }
     catch (e) {
         res.status(500).json({ error: e.message });

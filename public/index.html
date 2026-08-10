@@ -391,8 +391,9 @@ async function updateAllOffices() {
       div.innerHTML = `<div class="alert alert-success">
         <strong>✅ Actualizacion completa</strong><br>
         Recepciones actualizadas: ${data.updated}<br>
+        SKUs no encontrados en Bsale: ${data.notFound || 0}<br>
         Errores: ${data.errors}<br>
-        Total variantes: ${data.total}
+        Total SKUs: ${data.total}
       </div>`;
     } else {
       div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
