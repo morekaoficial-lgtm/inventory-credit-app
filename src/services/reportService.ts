@@ -61,12 +61,16 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
     const receptionsNewPrice = receptions.filter((r: any) => parseFloat(r.original_cost) === newPrice);
     const receptionsOldPrice = receptions.filter((r: any) => parseFloat(r.original_cost) > newPrice);
 
-    // Para precio NUEVO: tomar la PRIMERA (más antigua)
-    const firstNew = receptionsNewPrice.length > 0 ? receptionsNewPrice[0] : null;
+    // Solo recepciones con documento INV- (recepcion formal)
+    const receptionsNewPriceInv = receptionsNewPrice.filter((r: any) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
+    const receptionsOldPriceInv = receptionsOldPrice.filter((r: any) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
+
+    // Para precio NUEVO: tomar la PRIMERA (mas antigua) con INV-
+    const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
     const stockNuevo = receptionsNewPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
 
-    // Para precio VIEJO: tomar la ÚLTIMA (más nueva)
-    const lastOld = receptionsOldPrice.length > 0 ? receptionsOldPrice[receptionsOldPrice.length - 1] : null;
+    // Para precio VIEJO: tomar la ULTIMA (mas nueva) con INV-
+    const lastOld = receptionsOldPriceInv.length > 0 ? receptionsOldPriceInv[receptionsOldPriceInv.length - 1] : null;
     
     // Stock viejo = suma de (quantity_remaining - already_credited) de recepciones con costo > newPrice
     const stockViejo = receptionsOldPrice.reduce((sum: number, r: any) => {

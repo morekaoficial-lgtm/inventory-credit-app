@@ -366,11 +366,14 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
             // Separate by price
             const receptionsNewPrice = receptions.filter((r) => parseFloat(r.original_cost) === newPrice);
             const receptionsOldPrice = receptions.filter((r) => parseFloat(r.original_cost) > newPrice);
-            // First reception of stock nuevo (for arqueo)
-            const firstNew = receptionsNewPrice.length > 0 ? receptionsNewPrice[0] : null;
+            // Solo recepciones con documento INV- (recepcion formal)
+            const receptionsNewPriceInv = receptionsNewPrice.filter((r) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
+            const receptionsOldPriceInv = receptionsOldPrice.filter((r) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
+            // First reception of stock nuevo (for arqueo) - solo con INV-
+            const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
             const stockNuevo = receptionsNewPrice.reduce((sum, r) => sum + parseInt(r.quantity_remaining), 0);
-            // Last reception of stock viejo
-            const lastOld = receptionsOldPrice.length > 0 ? receptionsOldPrice[receptionsOldPrice.length - 1] : null;
+            // Last reception of stock viejo - solo con INV-
+            const lastOld = receptionsOldPriceInv.length > 0 ? receptionsOldPriceInv[receptionsOldPriceInv.length - 1] : null;
             // Stock viejo = FULL quantity_remaining (NOT minus already_credited - for arqueo)
             const stockViejo = receptionsOldPrice.reduce((sum, r) => sum + parseInt(r.quantity_remaining), 0);
             const precioViejo = lastOld ? parseFloat(lastOld.original_cost) : null;
