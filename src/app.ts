@@ -738,29 +738,49 @@ function parseVipCatalog(text: string, sourceFile: string) {
   return results;
 }
 
-app.post('/api/extract-vip-pdf', upload.single('file'), async (req, res) => {
+app.post('/api/extract-vip-pdf', upload.array('files', 20), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Archivo PDF requerido' });
+    const files = (req as any).files;
+    if (!files || files.length === 0) return res.status(400).json({ error: 'Archivo PDF requerido' });
 
-    const buffer = fs.readFileSync(req.file.path);
-    const pdfData = await pdfParse(buffer);
-    fs.unlinkSync(req.file.path);
+    const allProducts: any[] = [];
+    const errors: string[] = [];
+    const seen = new Set<string>();
 
-    const products = parseVipCatalog(pdfData.text, req.file.originalname);
+    for (const file of files) {
+      try {
+        const buffer = fs.readFileSync(file.path);
+        const pdfData = await pdfParse(buffer);
+        fs.unlinkSync(file.path);
 
-    if (products.length === 0) {
-      return res.status(404).json({ error: 'No se encontraron productos en el PDF. Asegurate de que sea un catalogo VIP de Moreka.' });
+        const products = parseVipCatalog(pdfData.text, file.originalname);
+        for (const p of products) {
+          const key = `${p.modelo}-${p.precioNuevo}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            allProducts.push(p);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`${file.originalname}: ${e.message}`);
+        try { fs.unlinkSync(file.path); } catch (_) {}
+      }
+    }
+
+    if (allProducts.length === 0) {
+      return res.status(404).json({ error: 'No se encontraron productos en ningun PDF. Asegurate de que sean catalogos VIP de Moreka.', details: errors });
     }
 
     // Build Excel
-    const wsData = [['Modelo', 'PrecioNuevo'], ...products.map(r => [r.modelo, r.precioNuevo])];
+    const wsData = [['Modelo', 'PrecioNuevo'], ...allProducts.map(r => [r.modelo, r.precioNuevo])];
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [{ wch: 15 }, { wch: 12 }];
     XLSX.utils.book_append_sheet(wb, ws, 'Precios VIP');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
-    res.setHeader('Content-Disposition', `attachment; filename="vip-precios-${Date.now()}.xlsx"`);
+    const fileName = files.length === 1 ? 'vip-precios' : `vip-precios-${files.length}-pdfs`;
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}-${Date.now()}.xlsx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (e: any) {

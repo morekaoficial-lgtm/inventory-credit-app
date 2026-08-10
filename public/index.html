@@ -270,12 +270,13 @@ tr:hover { background: #f7fafc; }
     <div class="card">
       <h2>📄 Extraer Precios de PDF VIP</h2>
       <p style="margin-bottom:15px;color:#718096;font-size:0.9rem;">
-        Sube un PDF de catalogo VIP de Moreka para extraer automaticamente <strong>Modelo</strong> y <strong>Precio</strong>.
+        Sube uno o mas PDFs de catalogo VIP de Moreka para extraer automaticamente <strong>Modelo</strong> y <strong>Precio</strong>.
         El resultado se descarga como Excel listo para "Calcular Masivo".
       </p>
       <div class="form-group">
-        <label>Seleccionar PDF VIP</label>
-        <input type="file" id="vip-pdf-file" accept=".pdf">
+        <label>Seleccionar PDFs VIP (podes elegir varios)</label>
+        <input type="file" id="vip-pdf-file" accept=".pdf" multiple onchange="updateVipFileCount()">
+        <div id="vip-file-count" style="margin-top:5px;font-size:0.85rem;color:#718096;"></div>
       </div>
       <button onclick="uploadVipPdf()">📥 Extraer y Descargar Excel</button>
       <div id="vip-pdf-result"></div>
@@ -871,42 +872,64 @@ async function uploadBulkCalculate() {
 
 async function uploadVipPdf() {
   const fileInput = document.getElementById('vip-pdf-file');
-  if (!fileInput.files[0]) return alert('Selecciona un PDF VIP');
+  const files = fileInput.files;
+  if (!files || files.length === 0) return alert('Selecciona al menos un PDF VIP');
 
   const formData = new FormData();
-  formData.append('file', fileInput.files[0]);
+  for (const f of files) {
+    formData.append('files', f);
+  }
 
   const btn = event.target;
   btn.disabled = true;
   btn.textContent = 'Extrayendo...';
   const div = document.getElementById('vip-pdf-result');
-  div.innerHTML = '<div class="alert alert-info">Procesando PDF...</div>';
+  div.innerHTML = `<div class="alert alert-info">Procesando ${files.length} PDF(s)...</div>`;
 
   try {
     const res = await fetch(API + '/extract-vip-pdf', { method: 'POST', body: formData });
 
-    if (res.ok && res.headers.get('content-type')?.includes('spreadsheet')) {
-      // Download the Excel file
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'vip-precios.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      a.remove();
-      div.innerHTML = '<div class="alert alert-success">✅ Excel descargado. Ahora podes usarlo en "Calcular Masivo".</div>';
-    } else {
-      const data = await res.json();
-      div.innerHTML = `<div class="alert alert-error">Error: ${data.error}</div>`;
+    if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('spreadsheet')) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = files.length === 1 ? 'vip-precios.xlsx' : `vip-precios-${files.length}-pdfs.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+        div.innerHTML = '<div class="alert alert-success">✅ Excel descargado. Ahora podes usarlo en "Calcular Masivo".</div>';
+        return;
+      }
     }
+
+    // Error response
+    let errorMsg = 'Error desconocido';
+    try {
+      const data = await res.json();
+      errorMsg = data.error || data.message || JSON.stringify(data);
+    } catch (e) {
+      errorMsg = `Error HTTP ${res.status}: ${res.statusText}`;
+    }
+    div.innerHTML = `<div class="alert alert-error"><strong>Error:</strong> ${errorMsg}</div>`;
   } catch (e) {
-    div.innerHTML = '<div class="alert alert-error">Error de conexion</div>';
+    div.innerHTML = `<div class="alert alert-error"><strong>Error de conexion:</strong> ${e.message || 'No se pudo conectar con el servidor. Verifica tu conexion o recarga la pagina.'}</div>`;
   }
 
   btn.disabled = false;
   btn.textContent = '📥 Extraer y Descargar Excel';
+}
+
+function updateVipFileCount() {
+  const fileInput = document.getElementById('vip-pdf-file');
+  const count = fileInput.files.length;
+  const div = document.getElementById('vip-file-count');
+  if (count === 0) div.textContent = '';
+  else if (count === 1) div.textContent = '1 PDF seleccionado';
+  else div.textContent = `${count} PDFs seleccionados`;
 }
 
 // Init
