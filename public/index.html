@@ -122,6 +122,11 @@ tr:hover { background: #f7fafc; }
         <input type="text" id="sync-sku" placeholder="Ej: BOCMORNEG405" value="BOCMORNEG405">
       </div>
       <button onclick="syncProduct()">Sincronizar</button>
+      <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0;">
+      <h3>Actualizar Sucursales (Bulk)</h3>
+      <p style="font-size:12px;color:#666;">Actualiza la sucursal de TODAS las recepciones existentes sin re-descargar datos.</p>
+      <button class="success" onclick="updateAllOffices()">🔄 Actualizar Todas las Sucursales</button>
+      <div id="sync-bulk-result"></div>
       <div id="sync-result"></div>
     </div>
 
@@ -370,6 +375,34 @@ async function syncProduct() {
 
   btn.disabled = false;
   btn.textContent = 'Sincronizar';
+}
+
+async function updateAllOffices() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Actualizando...';
+  const div = document.getElementById('sync-bulk-result');
+  div.innerHTML = '<div class="alert alert-info">Actualizando sucursales... Esto puede tardar unos minutos.</div>';
+
+  try {
+    const res = await fetch(API + '/sync/update-offices', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      div.innerHTML = `<div class="alert alert-success">
+        <strong>✅ Actualizacion completa</strong><br>
+        Recepciones actualizadas: ${data.updated}<br>
+        Errores: ${data.errors}<br>
+        Total variantes: ${data.total}
+      </div>`;
+    } else {
+      div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
+    }
+  } catch (e) {
+    div.innerHTML = '<div class="alert alert-error">Error de conexion</div>';
+  }
+
+  btn.disabled = false;
+  btn.textContent = '🔄 Actualizar Todas las Sucursales';
 }
 
 async function calculateCredit() {
