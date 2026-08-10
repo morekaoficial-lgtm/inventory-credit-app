@@ -100,6 +100,7 @@ tr:hover { background: #f7fafc; }
     <button onclick="showSection('upload')">Subir PDF</button>
     <button onclick="showSection('model-search')">Buscar por Modelo</button>
     <button onclick="showSection('bulk-calculate')">Calcular Masivo</button>
+    <button onclick="showSection('vip-pdf')">📄 Extraer PDF VIP</button>
   </div>
 
   <!-- Products Section -->
@@ -262,6 +263,22 @@ tr:hover { background: #f7fafc; }
       </div>
       <button onclick="uploadBulkCalculate()">🚀 Procesar</button>
       <div id="bulk-calculate-result"></div>
+    </div>
+  </div>
+
+  <div id="section-vip-pdf" class="section">
+    <div class="card">
+      <h2>📄 Extraer Precios de PDF VIP</h2>
+      <p style="margin-bottom:15px;color:#718096;font-size:0.9rem;">
+        Sube un PDF de catalogo VIP de Moreka para extraer automaticamente <strong>Modelo</strong> y <strong>Precio</strong>.
+        El resultado se descarga como Excel listo para "Calcular Masivo".
+      </p>
+      <div class="form-group">
+        <label>Seleccionar PDF VIP</label>
+        <input type="file" id="vip-pdf-file" accept=".pdf">
+      </div>
+      <button onclick="uploadVipPdf()">📥 Extraer y Descargar Excel</button>
+      <div id="vip-pdf-result"></div>
     </div>
   </div>
 
@@ -850,6 +867,46 @@ async function uploadBulkCalculate() {
 
   btn.disabled = false;
   btn.textContent = '🚀 Procesar';
+}
+
+async function uploadVipPdf() {
+  const fileInput = document.getElementById('vip-pdf-file');
+  if (!fileInput.files[0]) return alert('Selecciona un PDF VIP');
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Extrayendo...';
+  const div = document.getElementById('vip-pdf-result');
+  div.innerHTML = '<div class="alert alert-info">Procesando PDF...</div>';
+
+  try {
+    const res = await fetch(API + '/extract-vip-pdf', { method: 'POST', body: formData });
+
+    if (res.ok && res.headers.get('content-type')?.includes('spreadsheet')) {
+      // Download the Excel file
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'vip-precios.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+      div.innerHTML = '<div class="alert alert-success">✅ Excel descargado. Ahora podes usarlo en "Calcular Masivo".</div>';
+    } else {
+      const data = await res.json();
+      div.innerHTML = `<div class="alert alert-error">Error: ${data.error}</div>`;
+    }
+  } catch (e) {
+    div.innerHTML = '<div class="alert alert-error">Error de conexion</div>';
+  }
+
+  btn.disabled = false;
+  btn.textContent = '📥 Extraer y Descargar Excel';
 }
 
 // Init

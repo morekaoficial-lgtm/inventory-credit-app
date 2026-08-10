@@ -2,7 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import multer from 'multer';
+import pdfParse from 'pdf-parse';
 import * as XLSX from 'xlsx';
 import { initDatabase, pool } from './config/database';
 import * as bsale from './services/bsaleService';
@@ -684,6 +686,83 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
       errors: errors.length > 0 ? errors : undefined,
       results,
     });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============ VIP PDF EXTRACTOR ============
+// Extract Modelo + Precio from VIP PDF catalogues
+
+function parseVipCatalog(text: string, sourceFile: string) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  const results: any[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const priceMatch = line.match(/^\$\s*([\d,.]+)$/);
+    if (!priceMatch) continue;
+
+    let priceStr = priceMatch[1].replace(',', '.');
+    const precioNuevo = parseFloat(priceStr);
+    if (isNaN(precioNuevo) || precioNuevo <= 0 || precioNuevo > 5000) continue;
+
+    let modelo: string | null = null;
+    for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+      const candidate = lines[j];
+      if (candidate.length < 2 || candidate.length > 25) continue;
+      if (candidate.match(/^\d+$/)) continue;
+      const lower = candidate.toLowerCase();
+      if (lower.includes('cajas') || lower.includes('ventilador') || lower.includes('powerbank') ||
+          lower.includes('bocina') || lower.includes('smartwatch') || lower.includes('cargador') ||
+          lower.includes('soporte') || lower.includes('rasuradora')) continue;
+      if (candidate.startsWith('$')) break;
+
+      const modelWithSpaceQty = candidate.match(/^([A-Z]{1,4}-?\d{2,5}[A-Z]?)\s+\d+$/);
+      if (modelWithSpaceQty) { modelo = modelWithSpaceQty[1]; break; }
+
+      const modelMatch = candidate.match(/^[A-Z]{1,4}-?\d{2,5}[A-Z]?$/);
+      if (modelMatch) { modelo = modelMatch[0]; break; }
+
+      const concatMatch = candidate.match(/^([A-Z]{1,4}-?\d{2,5}[A-Z]?)(12|20|24|40|48|50|60|100)$/);
+      if (concatMatch) { modelo = concatMatch[1]; break; }
+    }
+
+    if (!modelo) continue;
+    const key = `${modelo}-${precioNuevo}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push({ modelo, precioNuevo, sourceFile });
+  }
+  return results;
+}
+
+app.post('/api/extract-vip-pdf', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Archivo PDF requerido' });
+
+    const buffer = fs.readFileSync(req.file.path);
+    const pdfData = await pdfParse(buffer);
+    fs.unlinkSync(req.file.path);
+
+    const products = parseVipCatalog(pdfData.text, req.file.originalname);
+
+    if (products.length === 0) {
+      return res.status(404).json({ error: 'No se encontraron productos en el PDF. Asegurate de que sea un catalogo VIP de Moreka.' });
+    }
+
+    // Build Excel
+    const wsData = [['Modelo', 'PrecioNuevo'], ...products.map(r => [r.modelo, r.precioNuevo])];
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 15 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Precios VIP');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', `attachment; filename="vip-precios-${Date.now()}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
