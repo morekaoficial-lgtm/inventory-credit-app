@@ -6,6 +6,7 @@ exports.saveCreditNotes = saveCreditNotes;
 exports.getPendingCreditNotes = getPendingCreditNotes;
 exports.markCreditNotePaid = markCreditNotePaid;
 exports.getCreditNoteSummary = getCreditNoteSummary;
+exports.deleteAllCreditNotes = deleteAllCreditNotes;
 const database_1 = require("../config/database");
 function calculateCreditNotes(stockItems, newPrice) {
     const creditNotes = [];
@@ -98,4 +99,8 @@ async function getCreditNoteSummary() {
         totalPaid: parseFloat(paid.rows[0].total),
         countPending: parseInt(count.rows[0].c),
     };
+}
+async function deleteAllCreditNotes() {
+    const result = await database_1.pool.query(`DELETE FROM credit_notes WHERE status = 'pending'`);
+    return result.rowCount || 0;
 }

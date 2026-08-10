@@ -118,3 +118,8 @@ export async function getCreditNoteSummary() {
     countPending: parseInt(count.rows[0].c),
   };
 }
+
+export async function deleteAllCreditNotes(): Promise<number> {
+  const result = await pool.query(`DELETE FROM credit_notes WHERE status = 'pending'`);
+  return result.rowCount || 0;
+}

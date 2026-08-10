@@ -252,6 +252,16 @@ app.post('/api/credit-notes/:id/pay', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+// Delete all pending credit notes
+app.delete('/api/credit-notes', async (_req, res) => {
+    try {
+        const deleted = await credit.deleteAllCreditNotes();
+        res.json({ success: true, deleted, message: `Se eliminaron ${deleted} notas de credito pendientes.` });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 // List products
 app.get('/api/products', async (_req, res) => {
     try {
