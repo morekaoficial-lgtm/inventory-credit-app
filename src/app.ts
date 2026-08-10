@@ -55,17 +55,27 @@ app.post('/api/sync/:sku', async (req, res) => {
     const stock = await bsale.getStock(variant.id);
     const costs = await bsale.getCostsWithDocumentNumbers(variant.id);
 
+    // Obtener sucursal
+    const officeId = stock?.office?.id || 2;
+    let officeName = stock?.office?.name || null;
+    if (!officeName) {
+      const office = await bsale.getOffice(officeId);
+      officeName = office?.name || `Sucursal ${officeId}`;
+    }
+
     for (const item of costs.history) {
       const detailId = item.reception_detail?.id || 0;
       await pool.query(`
-        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, synced_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, office_id, office_name, synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
         ON CONFLICT (id) DO UPDATE SET
           quantity_remaining = EXCLUDED.quantity_remaining,
           original_cost = EXCLUDED.original_cost,
           document_number = EXCLUDED.document_number,
+          office_id = EXCLUDED.office_id,
+          office_name = EXCLUDED.office_name,
           synced_at = CURRENT_TIMESTAMP
-      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null]);
+      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null, officeId, officeName]);
     }
 
     res.json({
@@ -141,17 +151,19 @@ app.get('/api/report/:sku/excel', async (req, res) => {
 
     // Build worksheet
     const wsData = [
-      ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Stock Nuevo', 'Precio nuevo',
-       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Precio Viejo', 'Stock Viejo',
+      ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
        'Diferencia unitaria', 'Total de nota de credito'],
       [
         result.producto,
         result.primeraRcPrecioNuevo || '',
         result.fechaPrimeraRc || '',
+        result.sucursalStockNuevo || '',
         result.stockNuevo,
         result.precioNuevo,
         result.ultimaRcPrecioViejo || '',
         result.fechaUltimaRc || '',
+        result.sucursalStockViejo || '',
         result.precioViejo ?? '',
         result.stockViejo,
         result.diferenciaUnitaria ?? '',
@@ -164,8 +176,8 @@ app.get('/api/report/:sku/excel', async (req, res) => {
 
     // Set column widths
     ws['!cols'] = [
-      { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+      { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
@@ -324,17 +336,27 @@ async function autoSyncSku(sku: string): Promise<{ success: boolean; productName
     const stock = await bsale.getStock(variant.id);
     const costs = await bsale.getCostsWithDocumentNumbers(variant.id);
 
+    // Obtener sucursal
+    const officeId = stock?.office?.id || 2;
+    let officeName = stock?.office?.name || null;
+    if (!officeName) {
+      const office = await bsale.getOffice(officeId);
+      officeName = office?.name || `Sucursal ${officeId}`;
+    }
+
     for (const item of costs.history) {
       const detailId = item.reception_detail?.id || 0;
       await pool.query(`
-        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, synced_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, office_id, office_name, synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
         ON CONFLICT (id) DO UPDATE SET
           quantity_remaining = EXCLUDED.quantity_remaining,
           original_cost = EXCLUDED.original_cost,
           document_number = EXCLUDED.document_number,
+          office_id = EXCLUDED.office_id,
+          office_name = EXCLUDED.office_name,
           synced_at = CURRENT_TIMESTAMP
-      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null]);
+      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null, officeId, officeName]);
     }
 
     return { success: true, productName };
@@ -536,8 +558,8 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
 
     // Build worksheet with all variants
     const wsData = [
-      ['Modelo', 'SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Stock Nuevo', 'Precio nuevo',
-       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Precio Viejo', 'Stock Viejo',
+      ['Modelo', 'SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
        'Diferencia unitaria', 'Total de nota de credito'],
     ];
 
@@ -550,10 +572,12 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
           result.producto,
           result.primeraRcPrecioNuevo || '',
           result.fechaPrimeraRc || '',
+          result.sucursalStockNuevo || '',
           String(result.stockNuevo),
           String(result.precioNuevo),
           result.ultimaRcPrecioViejo || '',
           result.fechaUltimaRc || '',
+          result.sucursalStockViejo || '',
           result.precioViejo !== null ? String(result.precioViejo) : '',
           String(result.stockViejo),
           result.diferenciaUnitaria !== null ? String(result.diferenciaUnitaria) : '',
@@ -574,8 +598,8 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [
-      { wch: 12 }, { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+      { wch: 12 }, { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
     ];
     XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

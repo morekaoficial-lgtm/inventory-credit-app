@@ -81,3 +81,22 @@ export function formatBsaleDate(timestamp: number): string {
   const d = new Date(timestamp * 1000);
   return d.toISOString().split('T')[0];
 }
+
+// Offices / Sucursales
+export async function getOffice(officeId: number): Promise<{ id: number; name: string } | null> {
+  try {
+    const data = await bsaleFetch(`/offices/${officeId}.json`);
+    return { id: officeId, name: data.name || `Sucursal ${officeId}` };
+  } catch {
+    return null;
+  }
+}
+
+export async function getAllOffices(): Promise<{ id: number; name: string }[]> {
+  try {
+    const data = await bsaleFetch('/offices.json?limit=50');
+    return (data.items || []).map((o: any) => ({ id: o.id, name: o.name }));
+  } catch {
+    return [];
+  }
+}

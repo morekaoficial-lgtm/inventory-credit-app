@@ -9,6 +9,8 @@ exports.getReceptionDocumentNumber = getReceptionDocumentNumber;
 exports.getCostsWithDocumentNumbers = getCostsWithDocumentNumbers;
 exports.getProductName = getProductName;
 exports.formatBsaleDate = formatBsaleDate;
+exports.getOffice = getOffice;
+exports.getAllOffices = getAllOffices;
 const BSALE_BASE_URL = 'https://api.bsale.io/v1';
 const TOKEN = process.env.BSALE_ACCESS_TOKEN || '';
 async function bsaleFetch(endpoint) {
@@ -65,4 +67,23 @@ async function getProductName(productId) {
 function formatBsaleDate(timestamp) {
     const d = new Date(timestamp * 1000);
     return d.toISOString().split('T')[0];
+}
+// Offices / Sucursales
+async function getOffice(officeId) {
+    try {
+        const data = await bsaleFetch(`/offices/${officeId}.json`);
+        return { id: officeId, name: data.name || `Sucursal ${officeId}` };
+    }
+    catch {
+        return null;
+    }
+}
+async function getAllOffices() {
+    try {
+        const data = await bsaleFetch('/offices.json?limit=50');
+        return (data.items || []).map((o) => ({ id: o.id, name: o.name }));
+    }
+    catch {
+        return [];
+    }
 }

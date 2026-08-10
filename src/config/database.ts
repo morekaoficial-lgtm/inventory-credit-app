@@ -28,6 +28,7 @@ export async function initDatabase() {
         bsale_reception_detail_id INTEGER,
         bsale_reception_id INTEGER,
         office_id INTEGER DEFAULT 2,
+        office_name TEXT,
         synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -78,6 +79,25 @@ export async function initDatabase() {
     `);
 
     await client.query(`CREATE INDEX IF NOT EXISTS idx_pdf_items_model ON pdf_items(model)`);
+
+    // Migration: add office_name to receptions if not exists
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='receptions' AND column_name='office_name') THEN
+          ALTER TABLE receptions ADD COLUMN office_name TEXT;
+        END IF;
+      END $$;
+    `);
+
+    // Offices cache table
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS offices (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
     // product_mappings: allow multiple SKUs per model (variants)
     await client.query(`

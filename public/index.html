@@ -559,12 +559,15 @@ async function generateReport() {
     if (data.primeraRcPrecioNuevo) {
       html += `<tr><td>Primera RC con Precio Nuevo</td><td><strong>${data.primeraRcPrecioNuevo}</strong></td></tr>`;
       html += `<tr><td>Fecha Primera RC</td><td>${data.fechaPrimeraRc}</td></tr>`;
+      html += `<tr><td>Sucursal Stock Nuevo</td><td>${data.sucursalStockNuevo || 'N/A'}</td></tr>`;
     } else if (data.stockNuevo > 0) {
       html += `<tr><td>Primera RC con Precio Nuevo</td><td>Sin numero de orden</td></tr>`;
       html += `<tr><td>Fecha Primera RC</td><td>${data.fechaPrimeraRc || 'N/A'}</td></tr>`;
+      html += `<tr><td>Sucursal Stock Nuevo</td><td>${data.sucursalStockNuevo || 'N/A'}</td></tr>`;
     } else {
       html += `<tr><td>Primera RC con Precio Nuevo</td><td><em>No hay recepciones a $${data.precioNuevo.toFixed(2)}</em></td></tr>`;
       html += `<tr><td>Fecha Primera RC</td><td>-</td></tr>`;
+      html += `<tr><td>Sucursal Stock Nuevo</td><td>-</td></tr>`;
     }
     
     html += `<tr><td>Stock Nuevo</td><td>${data.stockNuevo} unidades</td></tr>`;
@@ -580,6 +583,7 @@ async function generateReport() {
     }
     
     html += `<tr><td>Fecha Ultima RC</td><td>${data.fechaUltimaRc || 'N/A'}</td></tr>`;
+    html += `<tr><td>Sucursal Stock Viejo</td><td>${data.sucursalStockViejo || 'N/A'}</td></tr>`;
     html += `<tr><td>Precio Viejo</td><td>${data.precioViejo !== null ? '$' + data.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
     html += `<tr><td>Stock Viejo</td><td>${data.stockViejo} unidades</td></tr>`;
     html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${data.diferenciaUnitaria !== null ? '$' + data.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
@@ -796,9 +800,11 @@ async function generateReportByModel() {
       html += '<table style="margin-top:8px;"><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
       html += `<tr><td><strong>Producto</strong></td><td>${r.producto}</td></tr>`;
       html += `<tr><td>Primera RC Precio Nuevo</td><td>${r.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
+      html += `<tr><td>Sucursal Stock Nuevo</td><td>${r.sucursalStockNuevo || 'N/A'}</td></tr>`;
       html += `<tr><td>Stock Nuevo</td><td>${r.stockNuevo}</td></tr>`;
       html += `<tr><td>Precio Nuevo</td><td>$${r.precioNuevo.toFixed(2)}</td></tr>`;
       html += `<tr><td>Ultima RC Precio Viejo</td><td>${r.ultimaRcPrecioViejo || 'N/A'}</td></tr>`;
+      html += `<tr><td>Sucursal Stock Viejo</td><td>${r.sucursalStockViejo || 'N/A'}</td></tr>`;
       html += `<tr><td>Precio Viejo</td><td>${r.precioViejo !== null ? '$' + r.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
       html += `<tr><td>Stock Viejo</td><td>${r.stockViejo}</td></tr>`;
       html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${r.diferenciaUnitaria !== null ? '$' + r.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;

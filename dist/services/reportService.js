@@ -19,11 +19,12 @@ async function generateCreditReport(sku, newPrice) {
         r.admission_date,
         r.original_cost,
         r.quantity_remaining,
+        r.office_name,
         COALESCE(SUM(cn.quantity_credited), 0) as already_credited
       FROM receptions r
       LEFT JOIN credit_notes cn ON cn.reception_id = r.id AND cn.status != 'cancelled'
       WHERE r.sku = $1
-      GROUP BY r.id, r.document_number, r.admission_date, r.original_cost, r.quantity_remaining
+      GROUP BY r.id, r.document_number, r.admission_date, r.original_cost, r.quantity_remaining, r.office_name
       ORDER BY r.admission_date ASC
     `, [sku]);
         const receptions = receptionsResult.rows;
@@ -51,10 +52,12 @@ async function generateCreditReport(sku, newPrice) {
             producto: productName,
             primeraRcPrecioNuevo: firstNew?.document_number || null,
             fechaPrimeraRc: formatDate(firstNew?.admission_date),
+            sucursalStockNuevo: firstNew?.office_name || null,
             stockNuevo,
             precioNuevo: newPrice,
             ultimaRcPrecioViejo: lastOld?.document_number || null,
             fechaUltimaRc: formatDate(lastOld?.admission_date),
+            sucursalStockViejo: lastOld?.office_name || null,
             precioViejo,
             stockViejo,
             diferenciaUnitaria,

@@ -4,10 +4,12 @@ export interface CreditReportRow {
   producto: string;
   primeraRcPrecioNuevo: string | null;
   fechaPrimeraRc: string | null;
+  sucursalStockNuevo: string | null;
   stockNuevo: number;
   precioNuevo: number;
   ultimaRcPrecioViejo: string | null;
   fechaUltimaRc: string | null;
+  sucursalStockViejo: string | null;
   precioViejo: number | null;
   stockViejo: number;
   diferenciaUnitaria: number | null;
@@ -31,11 +33,12 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
         r.admission_date,
         r.original_cost,
         r.quantity_remaining,
+        r.office_name,
         COALESCE(SUM(cn.quantity_credited), 0) as already_credited
       FROM receptions r
       LEFT JOIN credit_notes cn ON cn.reception_id = r.id AND cn.status != 'cancelled'
       WHERE r.sku = $1
-      GROUP BY r.id, r.document_number, r.admission_date, r.original_cost, r.quantity_remaining
+      GROUP BY r.id, r.document_number, r.admission_date, r.original_cost, r.quantity_remaining, r.office_name
       ORDER BY r.admission_date ASC
     `, [sku]);
 
@@ -75,10 +78,12 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
       producto: productName,
       primeraRcPrecioNuevo: firstNew?.document_number || null,
       fechaPrimeraRc: formatDate(firstNew?.admission_date),
+      sucursalStockNuevo: firstNew?.office_name || null,
       stockNuevo,
       precioNuevo: newPrice,
       ultimaRcPrecioViejo: lastOld?.document_number || null,
       fechaUltimaRc: formatDate(lastOld?.admission_date),
+      sucursalStockViejo: lastOld?.office_name || null,
       precioViejo,
       stockViejo,
       diferenciaUnitaria,
