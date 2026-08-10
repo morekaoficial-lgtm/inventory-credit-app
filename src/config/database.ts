@@ -93,6 +93,16 @@ export async function initDatabase() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_mappings_model ON product_mappings(model)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_mappings_sku ON product_mappings(sku)`);
 
+    // Normalize function for fuzzy model matching
+    await client.query(`
+      CREATE OR REPLACE FUNCTION normalize_model(text)
+      RETURNS text AS $$
+      BEGIN
+        RETURN lower(regexp_replace($1, '[-\s]', '', 'g'));
+      END;
+      $$ LANGUAGE plpgsql IMMUTABLE;
+    `);
+
     console.log('Database initialized');
   } finally {
     client.release();

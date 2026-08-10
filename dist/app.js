@@ -46,6 +46,7 @@ const database_1 = require("./config/database");
 const bsale = __importStar(require("./services/bsaleService"));
 const credit = __importStar(require("./services/creditNoteService"));
 const report = __importStar(require("./services/reportService"));
+const modelMapping = __importStar(require("./services/modelMappingService"));
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;
 app.use((0, cors_1.default)());
@@ -274,6 +275,234 @@ app.post('/api/upload-pdf', upload.single('pdf'), async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+// ============ MODEL-TO-SKU MAPPING ENDPOINTS ============
+// Upload Modelo-SKU Excel to populate mappings
+app.post('/api/mappings/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file)
+            return res.status(400).json({ error: 'Archivo Excel requerido' });
+        const buffer = require('fs').readFileSync(req.file.path);
+        const result = await modelMapping.loadMappingsFromExcel(buffer);
+        // Clean up uploaded file
+        require('fs').unlinkSync(req.file.path);
+        res.json({
+            success: true,
+            mappingsLoaded: result.inserted,
+            errors: result.errors.length > 0 ? result.errors : undefined,
+        });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Lookup SKU by model (fuzzy matching)
+app.get('/api/mappings/lookup', async (req, res) => {
+    try {
+        const model = req.query.model;
+        if (!model)
+            return res.status(400).json({ error: 'model query param requerido' });
+        const skus = await modelMapping.findSkuByModel(model);
+        res.json({ model, normalized: modelMapping.normalizeModel(model), skus });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Get product details by model
+app.get('/api/product-by-model/:model', async (req, res) => {
+    try {
+        const { model } = req.params;
+        const skus = await modelMapping.findSkuByModel(model);
+        if (skus.length === 0) {
+            return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
+        }
+        // For now, return the first SKU's details
+        // In the future, could return all matches
+        const sku = skus[0];
+        const stockForCredit = await credit.getStockForCredit(sku);
+        const product = (await database_1.pool.query('SELECT * FROM receptions WHERE sku = $1 LIMIT 1', [sku])).rows[0];
+        if (!product) {
+            return res.status(404).json({
+                error: 'Producto no sincronizado en Bsale. Usa POST /api/sync/' + sku + ' primero.',
+                sku,
+                model,
+            });
+        }
+        res.json({
+            model,
+            sku,
+            productName: product.product_name,
+            receptions: stockForCredit,
+            totalRemaining: stockForCredit.reduce((sum, s) => sum + s.quantityRemaining, 0),
+            totalCredited: stockForCredit.reduce((sum, s) => sum + s.alreadyCredited, 0),
+            availableForCredit: stockForCredit.reduce((sum, s) => sum + s.availableForCredit, 0),
+        });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Calculate credit notes by model
+app.post('/api/calculate-by-model/:model', async (req, res) => {
+    try {
+        const { model } = req.params;
+        const { newPrice } = req.body;
+        if (!newPrice || newPrice <= 0)
+            return res.status(400).json({ error: 'newPrice requerido y mayor a 0' });
+        const skus = await modelMapping.findSkuByModel(model);
+        if (skus.length === 0) {
+            return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
+        }
+        const sku = skus[0];
+        const stockItems = await credit.getStockForCredit(sku);
+        if (!stockItems.length)
+            return res.status(404).json({ error: 'No hay stock sincronizado para este SKU', sku });
+        const result = credit.calculateCreditNotes(stockItems, newPrice);
+        res.json({ model, sku, productName: stockItems[0]?.productName, newPrice, creditNotes: result.creditNotes, totalAmount: result.totalAmount, currency: 'USD' });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Generate report by model (JSON)
+app.get('/api/report-by-model/:model', async (req, res) => {
+    try {
+        const { model } = req.params;
+        const newPrice = parseFloat(req.query.newPrice);
+        if (!newPrice || newPrice <= 0)
+            return res.status(400).json({ error: 'newPrice query param requerido y mayor a 0' });
+        const skus = await modelMapping.findSkuByModel(model);
+        if (skus.length === 0) {
+            return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
+        }
+        const sku = skus[0];
+        const result = await report.generateCreditReport(sku, newPrice);
+        res.json({ ...result, model, sku });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Generate report by model (Excel download)
+app.get('/api/report-by-model/:model/excel', async (req, res) => {
+    try {
+        const { model } = req.params;
+        const newPrice = parseFloat(req.query.newPrice);
+        if (!newPrice || newPrice <= 0)
+            return res.status(400).json({ error: 'newPrice query param requerido y mayor a 0' });
+        const skus = await modelMapping.findSkuByModel(model);
+        if (skus.length === 0) {
+            return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
+        }
+        const sku = skus[0];
+        const result = await report.generateCreditReport(sku, newPrice);
+        const wsData = [
+            ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Stock Nuevo', 'Precio nuevo',
+                'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Precio Viejo', 'Stock Viejo',
+                'Diferencia unitaria', 'Total de nota de credito'],
+            [
+                result.producto,
+                result.primeraRcPrecioNuevo || '',
+                result.fechaPrimeraRc || '',
+                result.stockNuevo,
+                result.precioNuevo,
+                result.ultimaRcPrecioViejo || '',
+                result.fechaUltimaRc || '',
+                result.precioViejo ?? '',
+                result.stockViejo,
+                result.diferenciaUnitaria ?? '',
+                result.totalNotaCredito ?? '',
+            ],
+        ];
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        ws['!cols'] = [
+            { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+            { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Disposition', `attachment; filename="reporte_nota_credito_${model}_${newPrice}.xlsx"`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.send(buf);
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Bulk calculate from Excel: columns = Modelo, PrecioNuevo
+app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file)
+            return res.status(400).json({ error: 'Archivo Excel requerido' });
+        const buffer = require('fs').readFileSync(req.file.path);
+        const workbook = XLSX.read(buffer, { type: 'buffer' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
+        require('fs').unlinkSync(req.file.path);
+        // Detect header
+        let dataStart = 0;
+        for (let i = 0; i < Math.min(rows.length, 5); i++) {
+            const row = rows[i];
+            if (row && row.length >= 2) {
+                const first = String(row[0] || '').toLowerCase().trim();
+                if (first.includes('modelo') || first.includes('model')) {
+                    dataStart = i + 1;
+                    break;
+                }
+            }
+        }
+        const results = [];
+        const errors = [];
+        for (let i = dataStart; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length < 2)
+                continue;
+            const model = String(row[0] || '').trim();
+            const newPrice = parseFloat(String(row[1] || '').replace(/[^0-9.]/g, ''));
+            if (!model || isNaN(newPrice) || newPrice <= 0) {
+                errors.push(`Fila ${i + 1}: modelo o precio inválido`);
+                continue;
+            }
+            try {
+                const skus = await modelMapping.findSkuByModel(model);
+                if (skus.length === 0) {
+                    errors.push(`Fila ${i + 1}: modelo "${model}" no encontrado`);
+                    continue;
+                }
+                const sku = skus[0];
+                const stockItems = await credit.getStockForCredit(sku);
+                if (!stockItems.length) {
+                    errors.push(`Fila ${i + 1}: modelo "${model}" (SKU: ${sku}) no tiene stock sincronizado`);
+                    continue;
+                }
+                const calc = credit.calculateCreditNotes(stockItems, newPrice);
+                results.push({
+                    row: i + 1,
+                    model,
+                    sku,
+                    productName: stockItems[0]?.productName,
+                    newPrice,
+                    totalAmount: calc.totalAmount,
+                    creditNotesCount: calc.creditNotes.length,
+                });
+            }
+            catch (e) {
+                errors.push(`Fila ${i + 1}: ${e.message}`);
+            }
+        }
+        res.json({
+            success: true,
+            processed: results.length,
+            errors: errors.length > 0 ? errors : undefined,
+            results,
+        });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// ============ EXISTING ENDPOINTS ============
 app.get('/', (_req, res) => {
     res.sendFile(path_1.default.join(__dirname, '../public/index.html'));
 });
