@@ -276,14 +276,20 @@ app.delete('/api/credit-notes', async (_req, res) => {
 // Download all pending credit notes as single Excel
 app.get('/api/credit-notes/excel', async (_req, res) => {
     try {
-        // Get unique SKUs with their new_cost from pending credit notes
-        const result = await database_1.pool.query(`
-      SELECT DISTINCT ON (sku) sku, new_cost
-      FROM credit_notes
-      WHERE status = 'pending'
-      ORDER BY sku, created_at DESC
+        // Get all pending credit notes grouped by SKU with their totals
+        const skuResult = await database_1.pool.query(`
+      SELECT 
+        cn.sku,
+        cn.new_cost,
+        MAX(cn.product_name) as product_name,
+        SUM(cn.amount) as total_credit_notes,
+        SUM(cn.quantity_credited) as total_qty_credited
+      FROM credit_notes cn
+      WHERE cn.status = 'pending'
+      GROUP BY cn.sku, cn.new_cost
+      ORDER BY cn.sku
     `);
-        if (result.rows.length === 0) {
+        if (skuResult.rows.length === 0) {
             return res.status(404).json({ error: 'No hay notas de credito pendientes' });
         }
         const wsData = [
@@ -291,29 +297,52 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
                 'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
                 'Diferencia unitaria', 'Total de nota de credito'],
         ];
-        for (const row of result.rows) {
-            try {
-                const rep = await report.generateCreditReport(row.sku, parseFloat(row.new_cost));
-                wsData.push([
-                    rep.producto,
-                    rep.primeraRcPrecioNuevo || '',
-                    rep.fechaPrimeraRc || '',
-                    rep.sucursalStockNuevo || '',
-                    rep.stockNuevo,
-                    rep.precioNuevo,
-                    rep.ultimaRcPrecioViejo || '',
-                    rep.fechaUltimaRc || '',
-                    rep.sucursalStockViejo || '',
-                    rep.precioViejo ?? '',
-                    rep.stockViejo,
-                    rep.diferenciaUnitaria ?? '',
-                    rep.totalNotaCredito ?? '',
-                ]);
-            }
-            catch (e) {
-                // Skip SKUs that can't generate report
-                wsData.push([row.sku, 'Error generando reporte', '', '', '', row.new_cost, '', '', '', '', '', '', '']);
-            }
+        for (const skuRow of skuResult.rows) {
+            const sku = skuRow.sku;
+            const newPrice = parseFloat(skuRow.new_cost);
+            // Get all receptions for this SKU
+            const receptionsResult = await database_1.pool.query(`
+        SELECT 
+          r.id,
+          r.document_number,
+          r.admission_date,
+          r.original_cost,
+          r.quantity_remaining,
+          r.office_name
+        FROM receptions r
+        WHERE r.sku = $1
+        ORDER BY r.admission_date ASC
+      `, [sku]);
+            const receptions = receptionsResult.rows;
+            // Separate by price
+            const receptionsNewPrice = receptions.filter((r) => parseFloat(r.original_cost) === newPrice);
+            const receptionsOldPrice = receptions.filter((r) => parseFloat(r.original_cost) > newPrice);
+            // First reception of stock nuevo (for arqueo)
+            const firstNew = receptionsNewPrice.length > 0 ? receptionsNewPrice[0] : null;
+            const stockNuevo = receptionsNewPrice.reduce((sum, r) => sum + parseInt(r.quantity_remaining), 0);
+            // Last reception of stock viejo
+            const lastOld = receptionsOldPrice.length > 0 ? receptionsOldPrice[receptionsOldPrice.length - 1] : null;
+            // Stock viejo = FULL quantity_remaining (NOT minus already_credited - for arqueo)
+            const stockViejo = receptionsOldPrice.reduce((sum, r) => sum + parseInt(r.quantity_remaining), 0);
+            const precioViejo = lastOld ? parseFloat(lastOld.original_cost) : null;
+            const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
+            // Total from actual saved credit notes (not recalculated)
+            const totalNotaCredito = parseFloat(skuRow.total_credit_notes) || 0;
+            wsData.push([
+                skuRow.product_name || sku,
+                firstNew?.document_number || '',
+                firstNew?.admission_date ? new Date(firstNew.admission_date * 1000).toISOString().split('T')[0] : '',
+                firstNew?.office_name || '',
+                stockNuevo,
+                newPrice,
+                lastOld?.document_number || '',
+                lastOld?.admission_date ? new Date(lastOld.admission_date * 1000).toISOString().split('T')[0] : '',
+                lastOld?.office_name || '',
+                precioViejo ?? '',
+                stockViejo,
+                diferenciaUnitaria ?? '',
+                totalNotaCredito,
+            ]);
         }
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.aoa_to_sheet(wsData);
