@@ -803,22 +803,36 @@ async function uploadBulkCalculate() {
       return;
     }
 
-    let html = `<div class="alert alert-success">
-      ✅ ${data.processed} productos procesados exitosamente.
+    let html = `<div class="alert alert-success" style="font-size:1.1rem;">
+      ✅ <strong>${data.processed}</strong> modelos procesados<br>
+      💾 <strong>${data.totalSavedNotes}</strong> notas de crédito guardadas automáticamente<br>
+      💰 Total NC: <strong>$${data.totalSavedAmount.toFixed(2)}</strong>
     </div>`;
 
     if (data.results && data.results.length > 0) {
-      html += '<table><thead><tr><th>Modelo</th><th>SKU</th><th>Producto</th><th>Precio Nuevo</th><th>Total NC</th></tr></thead><tbody>';
+      html += '<table><thead><tr><th>Modelo</th><th>Precio Nuevo</th><th>Variantes</th><th>NC Guardadas</th><th>Total NC</th></tr></thead><tbody>';
       for (const r of data.results) {
         html += `<tr>
-          <td>${r.model}</td>
-          <td><code>${r.sku}</code></td>
-          <td>${r.productName}</td>
+          <td><strong>${r.model}</strong></td>
           <td>$${r.newPrice.toFixed(2)}</td>
+          <td>${r.variantsProcessed}</td>
+          <td>${r.savedNotes}</td>
           <td class="credit-positive">$${r.totalAmount.toFixed(2)}</td>
         </tr>`;
       }
       html += '</tbody></table>';
+
+      // Detalle de variantes por modelo
+      for (const r of data.results) {
+        if (r.variants && r.variants.length > 0) {
+          html += `<div style="margin-top:10px;padding:10px;background:#f7fafc;border-radius:5px;">`;
+          html += `<strong>Detalle ${r.model}:</strong>`;
+          for (const v of r.variants) {
+            html += `<br>• <code>${v.sku}</code> — ${v.productName} — $${v.totalAmount.toFixed(2)} (${v.creditNotesCount} notas)`;
+          }
+          html += `</div>`;
+        }
+      }
     }
 
     if (data.errors && data.errors.length > 0) {

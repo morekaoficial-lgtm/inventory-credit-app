@@ -566,6 +566,7 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
     }
 });
 // Bulk calculate from Excel: columns = Modelo, PrecioNuevo
+// AUTO-SAVES credit notes to database!
 app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
     try {
         if (!req.file)
@@ -589,6 +590,8 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
         }
         const results = [];
         const errors = [];
+        let totalSavedNotes = 0;
+        let totalSavedAmount = 0;
         for (let i = dataStart; i < rows.length; i++) {
             const row = rows[i];
             if (!row || row.length < 2)
@@ -605,21 +608,47 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
                     errors.push(`Fila ${i + 1}: modelo "${model}" no encontrado`);
                     continue;
                 }
-                const sku = skus[0];
-                const stockItems = await credit.getStockForCredit(sku);
-                if (!stockItems.length) {
-                    errors.push(`Fila ${i + 1}: modelo "${model}" (SKU: ${sku}) no tiene stock sincronizado`);
+                // Process ALL variants for this model
+                const variantResults = [];
+                let modelTotalAmount = 0;
+                let modelSavedNotes = 0;
+                for (const sku of skus) {
+                    // Auto-sync if needed
+                    const existing = await database_1.pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
+                    if (existing.rows.length === 0) {
+                        await autoSyncSku(sku);
+                    }
+                    const stockItems = await credit.getStockForCredit(sku);
+                    if (!stockItems.length)
+                        continue;
+                    const calc = credit.calculateCreditNotes(stockItems, newPrice);
+                    if (calc.creditNotes.length > 0) {
+                        // AUTO-SAVE credit notes!
+                        await credit.saveCreditNotes(calc.creditNotes);
+                        modelTotalAmount += calc.totalAmount;
+                        modelSavedNotes += calc.creditNotes.length;
+                        totalSavedAmount += calc.totalAmount;
+                        totalSavedNotes += calc.creditNotes.length;
+                        variantResults.push({
+                            sku,
+                            productName: stockItems[0]?.productName,
+                            creditNotesCount: calc.creditNotes.length,
+                            totalAmount: calc.totalAmount,
+                        });
+                    }
+                }
+                if (variantResults.length === 0) {
+                    errors.push(`Fila ${i + 1}: modelo "${model}" — no hay notas de crédito para generar (precio nuevo >= costo actual)`);
                     continue;
                 }
-                const calc = credit.calculateCreditNotes(stockItems, newPrice);
                 results.push({
                     row: i + 1,
                     model,
-                    sku,
-                    productName: stockItems[0]?.productName,
                     newPrice,
-                    totalAmount: calc.totalAmount,
-                    creditNotesCount: calc.creditNotes.length,
+                    variantsProcessed: variantResults.length,
+                    totalAmount: modelTotalAmount,
+                    savedNotes: modelSavedNotes,
+                    variants: variantResults,
                 });
             }
             catch (e) {
@@ -629,6 +658,8 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
         res.json({
             success: true,
             processed: results.length,
+            totalSavedNotes,
+            totalSavedAmount,
             errors: errors.length > 0 ? errors : undefined,
             results,
         });
