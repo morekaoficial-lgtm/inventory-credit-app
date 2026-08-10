@@ -76,48 +76,6 @@ app.get('/api/stats', async (_req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-// Sync product from Bsale
-app.post('/api/sync/:sku', async (req, res) => {
-    try {
-        const { sku } = req.params;
-        const variant = await bsale.getVariantBySku(sku);
-        if (!variant)
-            return res.status(404).json({ error: 'Producto no encontrado en Bsale' });
-        const productName = await bsale.getProductName(variant.product.id);
-        const stock = await bsale.getStock(variant.id);
-        const costs = await bsale.getCostsWithDocumentNumbers(variant.id);
-        // Obtener sucursal
-        const officeId = stock?.office?.id || 2;
-        let officeName = stock?.office?.name || null;
-        if (!officeName) {
-            const office = await bsale.getOffice(officeId);
-            officeName = office?.name || `Sucursal ${officeId}`;
-        }
-        for (const item of costs.history) {
-            const detailId = item.reception_detail?.id || 0;
-            await database_1.pool.query(`
-        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, office_id, office_name, synced_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
-        ON CONFLICT (id) DO UPDATE SET
-          quantity_remaining = EXCLUDED.quantity_remaining,
-          original_cost = EXCLUDED.original_cost,
-          document_number = EXCLUDED.document_number,
-          office_id = EXCLUDED.office_id,
-          office_name = EXCLUDED.office_name,
-          synced_at = CURRENT_TIMESTAMP
-      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null, officeId, officeName]);
-        }
-        res.json({
-            sku, productName, variantId: variant.id,
-            stock: stock?.quantityAvailable || 0,
-            receptions: costs.history.length,
-            costs: costs.history.map(h => ({ cost: h.cost, available: h.availableFifo, date: bsale.formatBsaleDate(h.admissionDate) })),
-        });
-    }
-    catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
 // Update office_name for all existing receptions (bulk)
 app.post('/api/sync/update-offices', async (_req, res) => {
     try {
@@ -158,6 +116,48 @@ app.post('/api/sync/update-offices', async (_req, res) => {
             }
         }
         res.json({ success: true, updated, errors, notFound, total: skus.length });
+    }
+    catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+// Sync product from Bsale
+app.post('/api/sync/:sku', async (req, res) => {
+    try {
+        const { sku } = req.params;
+        const variant = await bsale.getVariantBySku(sku);
+        if (!variant)
+            return res.status(404).json({ error: 'Producto no encontrado en Bsale' });
+        const productName = await bsale.getProductName(variant.product.id);
+        const stock = await bsale.getStock(variant.id);
+        const costs = await bsale.getCostsWithDocumentNumbers(variant.id);
+        // Obtener sucursal
+        const officeId = stock?.office?.id || 2;
+        let officeName = stock?.office?.name || null;
+        if (!officeName) {
+            const office = await bsale.getOffice(officeId);
+            officeName = office?.name || `Sucursal ${officeId}`;
+        }
+        for (const item of costs.history) {
+            const detailId = item.reception_detail?.id || 0;
+            await database_1.pool.query(`
+        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, office_id, office_name, synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET
+          quantity_remaining = EXCLUDED.quantity_remaining,
+          original_cost = EXCLUDED.original_cost,
+          document_number = EXCLUDED.document_number,
+          office_id = EXCLUDED.office_id,
+          office_name = EXCLUDED.office_name,
+          synced_at = CURRENT_TIMESTAMP
+      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null, officeId, officeName]);
+        }
+        res.json({
+            sku, productName, variantId: variant.id,
+            stock: stock?.quantityAvailable || 0,
+            receptions: costs.history.length,
+            costs: costs.history.map(h => ({ cost: h.cost, available: h.availableFifo, date: bsale.formatBsaleDate(h.admissionDate) })),
+        });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
