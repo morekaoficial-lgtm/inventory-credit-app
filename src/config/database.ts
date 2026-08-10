@@ -79,15 +79,27 @@ export async function initDatabase() {
 
     await client.query(`CREATE INDEX IF NOT EXISTS idx_pdf_items_model ON pdf_items(model)`);
 
+    // product_mappings: allow multiple SKUs per model (variants)
     await client.query(`
       CREATE TABLE IF NOT EXISTS product_mappings (
         id SERIAL PRIMARY KEY,
-        model TEXT NOT NULL UNIQUE,
+        model TEXT NOT NULL,
         sku TEXT NOT NULL,
         product_name TEXT,
         variant_id INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(model, sku)
       )
+    `);
+
+    // Migration: drop old unique constraint on model if it exists (from previous schema)
+    await client.query(`
+      DO $$
+      BEGIN
+        ALTER TABLE product_mappings DROP CONSTRAINT IF EXISTS product_mappings_model_key;
+      EXCEPTION WHEN undefined_table THEN
+        NULL;
+      END $$;
     `);
 
     await client.query(`CREATE INDEX IF NOT EXISTS idx_mappings_model ON product_mappings(model)`);

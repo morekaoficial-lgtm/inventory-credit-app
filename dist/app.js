@@ -308,7 +308,7 @@ app.get('/api/mappings/lookup', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-// Get product details by model
+// Get product details by model (returns ALL variants/SKUs)
 app.get('/api/product-by-model/:model', async (req, res) => {
     try {
         const { model } = req.params;
@@ -316,108 +316,168 @@ app.get('/api/product-by-model/:model', async (req, res) => {
         if (skus.length === 0) {
             return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
         }
-        // For now, return the first SKU's details
-        // In the future, could return all matches
-        const sku = skus[0];
-        const stockForCredit = await credit.getStockForCredit(sku);
-        const product = (await database_1.pool.query('SELECT * FROM receptions WHERE sku = $1 LIMIT 1', [sku])).rows[0];
-        if (!product) {
-            return res.status(404).json({
-                error: 'Producto no sincronizado en Bsale. Usa POST /api/sync/' + sku + ' primero.',
+        // Fetch details for ALL SKUs (variants)
+        const variants = [];
+        for (const sku of skus) {
+            const stockForCredit = await credit.getStockForCredit(sku);
+            const product = (await database_1.pool.query('SELECT * FROM receptions WHERE sku = $1 LIMIT 1', [sku])).rows[0];
+            variants.push({
                 sku,
+                productName: product?.product_name || null,
+                synced: !!product,
+                receptions: stockForCredit,
+                totalRemaining: stockForCredit.reduce((sum, s) => sum + s.quantityRemaining, 0),
+                totalCredited: stockForCredit.reduce((sum, s) => sum + s.alreadyCredited, 0),
+                availableForCredit: stockForCredit.reduce((sum, s) => sum + s.availableForCredit, 0),
+            });
+        }
+        const syncedVariants = variants.filter(v => v.synced);
+        if (syncedVariants.length === 0) {
+            return res.status(404).json({
+                error: 'Ninguna variante sincronizada en Bsale. Sincroniza los SKUs primero.',
                 model,
+                skus,
+                variants,
             });
         }
         res.json({
             model,
-            sku,
-            productName: product.product_name,
-            receptions: stockForCredit,
-            totalRemaining: stockForCredit.reduce((sum, s) => sum + s.quantityRemaining, 0),
-            totalCredited: stockForCredit.reduce((sum, s) => sum + s.alreadyCredited, 0),
-            availableForCredit: stockForCredit.reduce((sum, s) => sum + s.availableForCredit, 0),
+            skusFound: skus.length,
+            variantsSynced: syncedVariants.length,
+            variants,
         });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
-// Calculate credit notes by model
+// Calculate credit notes by model (supports specific sku or all variants)
 app.post('/api/calculate-by-model/:model', async (req, res) => {
     try {
         const { model } = req.params;
-        const { newPrice } = req.body;
+        const { newPrice, sku: specificSku } = req.body;
         if (!newPrice || newPrice <= 0)
             return res.status(400).json({ error: 'newPrice requerido y mayor a 0' });
         const skus = await modelMapping.findSkuByModel(model);
         if (skus.length === 0) {
             return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
         }
-        const sku = skus[0];
-        const stockItems = await credit.getStockForCredit(sku);
-        if (!stockItems.length)
-            return res.status(404).json({ error: 'No hay stock sincronizado para este SKU', sku });
-        const result = credit.calculateCreditNotes(stockItems, newPrice);
-        res.json({ model, sku, productName: stockItems[0]?.productName, newPrice, creditNotes: result.creditNotes, totalAmount: result.totalAmount, currency: 'USD' });
+        const targetSkus = specificSku ? [specificSku] : skus;
+        const allResults = [];
+        let totalAmountAll = 0;
+        for (const sku of targetSkus) {
+            const stockItems = await credit.getStockForCredit(sku);
+            if (!stockItems.length)
+                continue;
+            const result = credit.calculateCreditNotes(stockItems, newPrice);
+            if (result.creditNotes.length > 0) {
+                allResults.push({
+                    sku,
+                    productName: stockItems[0]?.productName,
+                    newPrice,
+                    creditNotes: result.creditNotes,
+                    totalAmount: result.totalAmount,
+                });
+                totalAmountAll += result.totalAmount;
+            }
+        }
+        if (allResults.length === 0) {
+            return res.status(404).json({ error: 'No hay stock sincronizado o no hay notas de credito para generar', skus });
+        }
+        res.json({
+            model,
+            newPrice,
+            variantsCount: allResults.length,
+            totalAmountAll,
+            results: allResults,
+            currency: 'USD',
+        });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
-// Generate report by model (JSON)
+// Generate report by model (JSON) - supports specific sku or all variants
 app.get('/api/report-by-model/:model', async (req, res) => {
     try {
         const { model } = req.params;
         const newPrice = parseFloat(req.query.newPrice);
+        const specificSku = req.query.sku;
         if (!newPrice || newPrice <= 0)
             return res.status(400).json({ error: 'newPrice query param requerido y mayor a 0' });
         const skus = await modelMapping.findSkuByModel(model);
         if (skus.length === 0) {
             return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
         }
-        const sku = skus[0];
-        const result = await report.generateCreditReport(sku, newPrice);
-        res.json({ ...result, model, sku });
+        const targetSkus = specificSku ? [specificSku] : skus;
+        const allReports = [];
+        for (const sku of targetSkus) {
+            try {
+                const result = await report.generateCreditReport(sku, newPrice);
+                allReports.push({ ...result, sku });
+            }
+            catch (e) {
+                // Skip SKUs without receptions
+            }
+        }
+        if (allReports.length === 0) {
+            return res.status(404).json({ error: 'No hay recepciones sincronizadas para ninguna variante', skus });
+        }
+        res.json({ model, skus: targetSkus, reports: allReports });
     }
     catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
-// Generate report by model (Excel download)
+// Generate report by model (Excel download) - supports specific sku or all variants
 app.get('/api/report-by-model/:model/excel', async (req, res) => {
     try {
         const { model } = req.params;
         const newPrice = parseFloat(req.query.newPrice);
+        const specificSku = req.query.sku;
         if (!newPrice || newPrice <= 0)
             return res.status(400).json({ error: 'newPrice query param requerido y mayor a 0' });
         const skus = await modelMapping.findSkuByModel(model);
         if (skus.length === 0) {
             return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
         }
-        const sku = skus[0];
-        const result = await report.generateCreditReport(sku, newPrice);
+        const targetSkus = specificSku ? [specificSku] : skus;
+        // Build worksheet with all variants
         const wsData = [
-            ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Stock Nuevo', 'Precio nuevo',
+            ['Modelo', 'SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Stock Nuevo', 'Precio nuevo',
                 'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Precio Viejo', 'Stock Viejo',
                 'Diferencia unitaria', 'Total de nota de credito'],
-            [
-                result.producto,
-                result.primeraRcPrecioNuevo || '',
-                result.fechaPrimeraRc || '',
-                result.stockNuevo,
-                result.precioNuevo,
-                result.ultimaRcPrecioViejo || '',
-                result.fechaUltimaRc || '',
-                result.precioViejo ?? '',
-                result.stockViejo,
-                result.diferenciaUnitaria ?? '',
-                result.totalNotaCredito ?? '',
-            ],
         ];
+        for (const sku of targetSkus) {
+            try {
+                const result = await report.generateCreditReport(sku, newPrice);
+                wsData.push([
+                    model,
+                    sku,
+                    result.producto,
+                    result.primeraRcPrecioNuevo || '',
+                    result.fechaPrimeraRc || '',
+                    String(result.stockNuevo),
+                    String(result.precioNuevo),
+                    result.ultimaRcPrecioViejo || '',
+                    result.fechaUltimaRc || '',
+                    result.precioViejo !== null ? String(result.precioViejo) : '',
+                    String(result.stockViejo),
+                    result.diferenciaUnitaria !== null ? String(result.diferenciaUnitaria) : '',
+                    result.totalNotaCredito !== null ? String(result.totalNotaCredito) : '',
+                ]);
+            }
+            catch (e) {
+                // Skip SKUs without receptions
+            }
+        }
+        if (wsData.length === 1) {
+            return res.status(404).json({ error: 'No hay recepciones sincronizadas para ninguna variante' });
+        }
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.aoa_to_sheet(wsData);
         ws['!cols'] = [
-            { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+            { wch: 12 }, { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
             { wch: 28 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
         ];
         XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');

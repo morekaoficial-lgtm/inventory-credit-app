@@ -56,23 +56,20 @@ export async function loadMappingsFromExcel(buffer: Buffer): Promise<{ inserted:
       const normalized = normalizeModel(model);
 
       try {
+        // Insert with (model, sku) unique constraint - allows multiple SKUs per model
         await client.query(
           `INSERT INTO product_mappings (model, sku, created_at)
            VALUES ($1, $2, CURRENT_TIMESTAMP)
-           ON CONFLICT (model) DO UPDATE SET
-             sku = EXCLUDED.sku,
-             created_at = CURRENT_TIMESTAMP`,
+           ON CONFLICT (model, sku) DO NOTHING`,
           [model, sku]
         );
 
-        // Also store a normalized lookup entry if different
+        // Also store a normalized lookup entry if different from original
         if (normalized !== model.toLowerCase().trim()) {
           await client.query(
             `INSERT INTO product_mappings (model, sku, created_at)
              VALUES ($1, $2, CURRENT_TIMESTAMP)
-             ON CONFLICT (model) DO UPDATE SET
-               sku = EXCLUDED.sku,
-               created_at = CURRENT_TIMESTAMP`,
+             ON CONFLICT (model, sku) DO NOTHING`,
             [normalized, sku]
           );
         }

@@ -642,31 +642,33 @@ async function lookupModel() {
   if (!model) return alert('Ingresa un modelo');
 
   try {
-    const res = await fetch(API + '/mappings/lookup?model=' + encodeURIComponent(model));
+    const res = await fetch(API + '/product-by-model/' + encodeURIComponent(model));
     const data = await res.json();
     const div = document.getElementById('model-lookup-result');
 
-    if (!res.ok || data.skus.length === 0) {
-      div.innerHTML = `<div class="alert alert-error">Modelo no encontrado. Sube el Excel de mapeo primero.</div>`;
+    if (!res.ok) {
+      div.innerHTML = `<div class="alert alert-error">${data.error}</div>`;
       return;
     }
 
     let html = `<div class="alert alert-success">
-      <strong>${data.model}</strong> (normalizado: ${data.normalized})<br>
-      SKU(s) encontrado(s): <code>${data.skus.join(', ')}</code>
+      <strong>${data.model}</strong> — ${data.variantsSynced} de ${data.skusFound} variantes sincronizadas
     </div>`;
 
-    const sku = data.skus[0];
-    const prodRes = await fetch(API + '/product/' + encodeURIComponent(sku));
-    if (prodRes.ok) {
-      const prod = await prodRes.json();
-      html += `<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>`;
-      html += `<tr><td>SKU</td><td><code>${prod.sku}</code></td></tr>`;
-      html += `<tr><td>Producto</td><td>${prod.productName}</td></tr>`;
-      html += `<tr><td>Stock Total</td><td>${prod.totalRemaining}</td></tr>`;
-      html += `<tr><td>Disponible para NC</td><td><strong>${prod.availableForCredit}</strong></td></tr>`;
-      html += `</tbody></table>`;
+    html += '<table><thead><tr><th>SKU</th><th>Producto</th><th>Stock Total</th><th>Disponible NC</th><th>Estado</th></tr></thead><tbody>';
+    for (const v of data.variants) {
+      const status = v.synced
+        ? `<span style="color:#38a169">✅ Sincronizado</span>`
+        : `<span style="color:#e53e3e">❌ No sincronizado</span>`;
+      html += `<tr>
+        <td><code>${v.sku}</code></td>
+        <td>${v.productName || '-'}</td>
+        <td>${v.totalRemaining}</td>
+        <td><strong>${v.availableForCredit}</strong></td>
+        <td>${status}</td>
+      </tr>`;
     }
+    html += '</tbody></table>';
 
     div.innerHTML = html;
   } catch (e) {
@@ -694,28 +696,32 @@ async function calculateByModel() {
     }
 
     let html = `<div class="alert alert-info">
-      <strong>${data.productName}</strong> (Modelo: ${data.model}, SKU: ${data.sku})<br>
-      Precio nuevo: $${data.newPrice}<br>
-      <strong>Total NC: $${data.totalAmount.toFixed(2)}</strong>
+      <strong>${data.model}</strong> — Precio nuevo: $${data.newPrice}<br>
+      <strong>Variantes con NC: ${data.variantsCount} | Total NC: $${data.totalAmountAll.toFixed(2)}</strong>
     </div>`;
 
-    if (data.creditNotes.length > 0) {
-      html += '<table><thead><tr><th>Recepcion</th><th>Costo Original</th><th>Cantidad</th><th>Diferencia</th><th>Subtotal</th></tr></thead><tbody>';
-      for (const note of data.creditNotes) {
-        const diff = note.oldCost - note.newCost;
-        const subtotal = diff * note.quantity;
-        html += `<tr>
-          <td>#${note.receptionId}</td>
-          <td>$${note.oldCost.toFixed(2)}</td>
-          <td>${note.quantity}</td>
-          <td class="credit-positive">-$${diff.toFixed(2)}</td>
-          <td class="credit-positive">$${subtotal.toFixed(2)}</td>
-        </tr>`;
+    for (const variant of data.results) {
+      html += `<div style="margin-top:15px;padding:10px;background:#f7fafc;border-radius:5px;">`;
+      html += `<strong>Variante: ${variant.sku}</strong> — ${variant.productName}<br>`;
+      html += `Total NC: <span class="credit-positive">$${variant.totalAmount.toFixed(2)}</span>`;
+
+      if (variant.creditNotes.length > 0) {
+        html += '<table style="margin-top:8px;"><thead><tr><th>Recepcion</th><th>Costo Original</th><th>Cantidad</th><th>Diferencia</th><th>Subtotal</th></tr></thead><tbody>';
+        for (const note of variant.creditNotes) {
+          const diff = note.oldCost - note.newCost;
+          const subtotal = diff * note.quantity;
+          html += `<tr>
+            <td>#${note.receptionId}</td>
+            <td>$${note.oldCost.toFixed(2)}</td>
+            <td>${note.quantity}</td>
+            <td class="credit-positive">-$${diff.toFixed(2)}</td>
+            <td class="credit-positive">$${subtotal.toFixed(2)}</td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+        html += `<button class="success" onclick='saveCreditNotes(${JSON.stringify(variant.creditNotes).replace(/'/g, "&#39;")})'>Guardar Notas de Credito (${variant.sku})</button>`;
       }
-      html += '</tbody></table>';
-      html += `<button class="success" onclick='saveCreditNotes(${JSON.stringify(data.creditNotes).replace(/'/g, "&#39;")})'>Guardar Notas de Credito</button>`;
-    } else {
-      html += '<div class="alert alert-info">No hay notas de credito para generar (precio nuevo >= costo actual)</div>';
+      html += `</div>`;
     }
 
     div.innerHTML = html;
@@ -743,20 +749,24 @@ async function generateReportByModel() {
       return;
     }
 
-    let html = '<div class="alert alert-success"><strong>Reporte generado</strong></div>';
-    html += '<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
-    html += `<tr><td><strong>Modelo</strong></td><td>${data.model}</td></tr>`;
-    html += `<tr><td><strong>SKU</strong></td><td><code>${data.sku}</code></td></tr>`;
-    html += `<tr><td><strong>Producto</strong></td><td>${data.producto}</td></tr>`;
-    html += `<tr><td>Primera RC Precio Nuevo</td><td>${data.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
-    html += `<tr><td>Stock Nuevo</td><td>${data.stockNuevo}</td></tr>`;
-    html += `<tr><td>Precio Nuevo</td><td>$${data.precioNuevo.toFixed(2)}</td></tr>`;
-    html += `<tr><td>Ultima RC Precio Viejo</td><td>${data.ultimaRcPrecioViejo || 'N/A'}</td></tr>`;
-    html += `<tr><td>Precio Viejo</td><td>${data.precioViejo !== null ? '$' + data.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
-    html += `<tr><td>Stock Viejo</td><td>${data.stockViejo}</td></tr>`;
-    html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${data.diferenciaUnitaria !== null ? '$' + data.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
-    html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${data.totalNotaCredito !== null ? '$' + data.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
-    html += '</tbody></table>';
+    let html = '<div class="alert alert-success"><strong>Reporte generado</strong> — ' + data.reports.length + ' variantes</div>';
+
+    for (const r of data.reports) {
+      html += `<div style="margin-top:15px;padding:10px;background:#f7fafc;border-radius:5px;">`;
+      html += `<strong>Variante: ${r.sku}</strong><br>`;
+      html += '<table style="margin-top:8px;"><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
+      html += `<tr><td><strong>Producto</strong></td><td>${r.producto}</td></tr>`;
+      html += `<tr><td>Primera RC Precio Nuevo</td><td>${r.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
+      html += `<tr><td>Stock Nuevo</td><td>${r.stockNuevo}</td></tr>`;
+      html += `<tr><td>Precio Nuevo</td><td>$${r.precioNuevo.toFixed(2)}</td></tr>`;
+      html += `<tr><td>Ultima RC Precio Viejo</td><td>${r.ultimaRcPrecioViejo || 'N/A'}</td></tr>`;
+      html += `<tr><td>Precio Viejo</td><td>${r.precioViejo !== null ? '$' + r.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
+      html += `<tr><td>Stock Viejo</td><td>${r.stockViejo}</td></tr>`;
+      html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${r.diferenciaUnitaria !== null ? '$' + r.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
+      html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${r.totalNotaCredito !== null ? '$' + r.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
+      html += '</tbody></table>';
+      html += `</div>`;
+    }
 
     div.innerHTML = html;
     document.getElementById('btn-download-model-excel').style.display = 'inline-block';
