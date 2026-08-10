@@ -145,7 +145,8 @@ tr:hover { background: #f7fafc; }
     <div class="card">
       <h2>Notas de Credito Pendientes</h2>
       <div style="margin-bottom:15px;">
-        <button class="danger" onclick="deleteAllCreditNotes()" style="background:#e53e3e;">🗑️ Borrar Todas las Notas Pendientes</button>
+        <button class="success" onclick="downloadAllCreditNotesExcel()">📥 Descargar Todo (Excel)</button>
+        <button class="danger" onclick="deleteAllCreditNotes()" style="background:#e53e3e; margin-left:10px;">🗑️ Borrar Todas las Notas Pendientes</button>
       </div>
       <div id="credit-list">
         <div class="loading">Cargando...</div>
@@ -465,6 +466,11 @@ async function loadCreditNotes() {
   } catch (e) {
     document.getElementById('credit-list').innerHTML = '<div class="alert alert-error">Error cargando NC</div>';
   }
+}
+
+function downloadAllCreditNotesExcel() {
+  const url = API + '/credit-notes/excel';
+  window.open(url, '_blank');
 }
 
 async function deleteAllCreditNotes() {

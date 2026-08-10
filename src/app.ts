@@ -250,6 +250,68 @@ app.delete('/api/credit-notes', async (_req, res) => {
   }
 });
 
+// Download all pending credit notes as single Excel
+app.get('/api/credit-notes/excel', async (_req, res) => {
+  try {
+    // Get unique SKUs with their new_cost from pending credit notes
+    const result = await pool.query(`
+      SELECT DISTINCT ON (sku) sku, new_cost
+      FROM credit_notes
+      WHERE status = 'pending'
+      ORDER BY sku, created_at DESC
+    `);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No hay notas de credito pendientes' });
+    }
+
+    const wsData: any[][] = [
+      ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
+       'Diferencia unitaria', 'Total de nota de credito'],
+    ];
+
+    for (const row of result.rows) {
+      try {
+        const rep = await report.generateCreditReport(row.sku, parseFloat(row.new_cost));
+        wsData.push([
+          rep.producto,
+          rep.primeraRcPrecioNuevo || '',
+          rep.fechaPrimeraRc || '',
+          rep.sucursalStockNuevo || '',
+          rep.stockNuevo,
+          rep.precioNuevo,
+          rep.ultimaRcPrecioViejo || '',
+          rep.fechaUltimaRc || '',
+          rep.sucursalStockViejo || '',
+          rep.precioViejo ?? '',
+          rep.stockViejo,
+          rep.diferenciaUnitaria ?? '',
+          rep.totalNotaCredito ?? '',
+        ]);
+      } catch (e) {
+        // Skip SKUs that can't generate report
+        wsData.push([row.sku, 'Error generando reporte', '', '', '', row.new_cost, '', '', '', '', '', '', '']);
+      }
+    }
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [
+      { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, 'Notas de Credito');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', `attachment; filename="notas_credito_pendientes.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // List products
 app.get('/api/products', async (_req, res) => {
   try {
