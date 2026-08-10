@@ -52,9 +52,13 @@ const modelMapping = __importStar(require("./services/modelMappingService"));
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;
 app.use((0, cors_1.default)());
-app.use(express_1.default.json());
+app.use(express_1.default.json({ limit: '50mb' }));
+app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express_1.default.static(path_1.default.join(__dirname, '../public')));
-const upload = (0, multer_1.default)({ dest: 'uploads/' });
+const upload = (0, multer_1.default)({
+    dest: 'uploads/',
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB per file
+});
 (0, database_1.initDatabase)();
 // Health
 app.get('/api/health', (_req, res) => {
