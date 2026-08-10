@@ -289,7 +289,45 @@ app.get('/api/mappings/lookup', async (req, res) => {
   }
 });
 
-// Get product details by model (returns ALL variants/SKUs)
+// Auto-sync helper: sync a SKU from Bsale if not already in DB
+async function autoSyncSku(sku: string): Promise<{ success: boolean; productName?: string; error?: string }> {
+  try {
+    // Check if already synced
+    const existing = await pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
+    if (existing.rows.length > 0) {
+      return { success: true };
+    }
+
+    // Fetch from Bsale
+    const variant = await bsale.getVariantBySku(sku);
+    if (!variant) {
+      return { success: false, error: 'SKU no encontrado en Bsale' };
+    }
+
+    const productName = await bsale.getProductName(variant.product.id);
+    const stock = await bsale.getStock(variant.id);
+    const costs = await bsale.getCostsWithDocumentNumbers(variant.id);
+
+    for (const item of costs.history) {
+      const detailId = item.reception_detail?.id || 0;
+      await pool.query(`
+        INSERT INTO receptions (id, variant_id, sku, product_name, original_cost, quantity_received, quantity_remaining, bsale_reception_detail_id, admission_date, document_number, synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO UPDATE SET
+          quantity_remaining = EXCLUDED.quantity_remaining,
+          original_cost = EXCLUDED.original_cost,
+          document_number = EXCLUDED.document_number,
+          synced_at = CURRENT_TIMESTAMP
+      `, [detailId, variant.id, sku, productName, item.cost, item.availableFifo, item.availableFifo, detailId, item.admissionDate, item.documentNumber || null]);
+    }
+
+    return { success: true, productName };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+// Get product details by model (returns ALL variants/SKUs) — auto-syncs unsynced variants
 app.get('/api/product-by-model/:model', async (req, res) => {
   try {
     const { model } = req.params;
@@ -297,6 +335,16 @@ app.get('/api/product-by-model/:model', async (req, res) => {
 
     if (skus.length === 0) {
       return res.status(404).json({ error: 'Modelo no encontrado. Sube el Excel de mapeo primero.' });
+    }
+
+    // Auto-sync any unsynced SKUs
+    const syncResults: any[] = [];
+    for (const sku of skus) {
+      const existing = await pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
+      if (existing.rows.length === 0) {
+        const syncResult = await autoSyncSku(sku);
+        syncResults.push({ sku, ...syncResult });
+      }
     }
 
     // Fetch details for ALL SKUs (variants)
@@ -317,19 +365,11 @@ app.get('/api/product-by-model/:model', async (req, res) => {
     }
 
     const syncedVariants = variants.filter(v => v.synced);
-    if (syncedVariants.length === 0) {
-      return res.status(404).json({
-        error: 'Ninguna variante sincronizada en Bsale. Sincroniza los SKUs primero.',
-        model,
-        skus,
-        variants,
-      });
-    }
-
     res.json({
       model,
       skusFound: skus.length,
       variantsSynced: syncedVariants.length,
+      autoSyncResults: syncResults.length > 0 ? syncResults : undefined,
       variants,
     });
   } catch (e: any) {
@@ -337,7 +377,7 @@ app.get('/api/product-by-model/:model', async (req, res) => {
   }
 });
 
-// Calculate credit notes by model (supports specific sku or all variants)
+// Calculate credit notes by model (supports specific sku or all variants) — auto-syncs unsynced variants
 app.post('/api/calculate-by-model/:model', async (req, res) => {
   try {
     const { model } = req.params;
@@ -350,6 +390,17 @@ app.post('/api/calculate-by-model/:model', async (req, res) => {
     }
 
     const targetSkus = specificSku ? [specificSku] : skus;
+
+    // Auto-sync any unsynced SKUs first
+    const syncResults: any[] = [];
+    for (const sku of targetSkus) {
+      const existing = await pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
+      if (existing.rows.length === 0) {
+        const syncResult = await autoSyncSku(sku);
+        syncResults.push({ sku, ...syncResult });
+      }
+    }
+
     const allResults: any[] = [];
     let totalAmountAll = 0;
 
@@ -371,7 +422,11 @@ app.post('/api/calculate-by-model/:model', async (req, res) => {
     }
 
     if (allResults.length === 0) {
-      return res.status(404).json({ error: 'No hay stock sincronizado o no hay notas de credito para generar', skus });
+      return res.status(404).json({
+        error: 'No hay stock sincronizado o no hay notas de credito para generar',
+        skus,
+        autoSyncResults: syncResults.length > 0 ? syncResults : undefined,
+      });
     }
 
     res.json({
@@ -380,6 +435,7 @@ app.post('/api/calculate-by-model/:model', async (req, res) => {
       variantsCount: allResults.length,
       totalAmountAll,
       results: allResults,
+      autoSyncResults: syncResults.length > 0 ? syncResults : undefined,
       currency: 'USD',
     });
   } catch (e: any) {
@@ -387,7 +443,7 @@ app.post('/api/calculate-by-model/:model', async (req, res) => {
   }
 });
 
-// Generate report by model (JSON) - supports specific sku or all variants
+// Generate report by model (JSON) - supports specific sku or all variants — auto-syncs unsynced variants
 app.get('/api/report-by-model/:model', async (req, res) => {
   try {
     const { model } = req.params;
@@ -401,6 +457,17 @@ app.get('/api/report-by-model/:model', async (req, res) => {
     }
 
     const targetSkus = specificSku ? [specificSku] : skus;
+
+    // Auto-sync any unsynced SKUs first
+    const syncResults: any[] = [];
+    for (const sku of targetSkus) {
+      const existing = await pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
+      if (existing.rows.length === 0) {
+        const syncResult = await autoSyncSku(sku);
+        syncResults.push({ sku, ...syncResult });
+      }
+    }
+
     const allReports: any[] = [];
 
     for (const sku of targetSkus) {
@@ -413,16 +480,20 @@ app.get('/api/report-by-model/:model', async (req, res) => {
     }
 
     if (allReports.length === 0) {
-      return res.status(404).json({ error: 'No hay recepciones sincronizadas para ninguna variante', skus });
+      return res.status(404).json({
+        error: 'No hay recepciones sincronizadas para ninguna variante',
+        skus,
+        autoSyncResults: syncResults.length > 0 ? syncResults : undefined,
+      });
     }
 
-    res.json({ model, skus: targetSkus, reports: allReports });
+    res.json({ model, skus: targetSkus, reports: allReports, autoSyncResults: syncResults.length > 0 ? syncResults : undefined });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Generate report by model (Excel download) - supports specific sku or all variants
+// Generate report by model (Excel download) - supports specific sku or all variants — auto-syncs unsynced variants
 app.get('/api/report-by-model/:model/excel', async (req, res) => {
   try {
     const { model } = req.params;
@@ -436,6 +507,16 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
     }
 
     const targetSkus = specificSku ? [specificSku] : skus;
+
+    // Auto-sync any unsynced SKUs first
+    const syncResults: any[] = [];
+    for (const sku of targetSkus) {
+      const existing = await pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
+      if (existing.rows.length === 0) {
+        const syncResult = await autoSyncSku(sku);
+        syncResults.push({ sku, ...syncResult });
+      }
+    }
 
     // Build worksheet with all variants
     const wsData = [
@@ -468,7 +549,10 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
     }
 
     if (wsData.length === 1) {
-      return res.status(404).json({ error: 'No hay recepciones sincronizadas para ninguna variante' });
+      return res.status(404).json({
+        error: 'No hay recepciones sincronizadas para ninguna variante',
+        autoSyncResults: syncResults.length > 0 ? syncResults : undefined,
+      });
     }
 
     const wb = XLSX.utils.book_new();
