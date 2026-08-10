@@ -18,7 +18,7 @@ export function normalizeModel(model: string): string {
  * Load model-to-SKU mappings from an Excel buffer into the database.
  * Expects columns: Modelo, SKU
  */
-export async function loadMappingsFromExcel(buffer: Buffer): Promise<{ inserted: number; errors: string[] }> {
+export async function loadMappingsFromExcel(buffer: Buffer, replaceAll: boolean = true): Promise<{ inserted: number; errors: string[] }> {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false });
@@ -43,6 +43,11 @@ export async function loadMappingsFromExcel(buffer: Buffer): Promise<{ inserted:
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    // Si replaceAll es true, limpiar tabla primero para evitar conflictos con datos viejos
+    if (replaceAll) {
+      await client.query('TRUNCATE TABLE product_mappings');
+    }
 
     for (let i = dataStart; i < rows.length; i++) {
       const row = rows[i];
