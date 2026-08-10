@@ -1,6 +1,8 @@
 import { pool } from '../config/database';
+import { getVariantBySku, getStockAllOffices } from './bsaleService';
 
 export interface CreditReportRow {
+  sku: string;
   producto: string;
   primeraRcPrecioNuevo: string | null;
   fechaPrimeraRc: string | null;
@@ -14,6 +16,8 @@ export interface CreditReportRow {
   stockViejo: number;
   diferenciaUnitaria: number | null;
   totalNotaCredito: number | null;
+  stockPorSucursal: { sucursal: string; stock: number }[];
+  totalStock: number;
 }
 
 function formatDate(timestamp: number | null): string | null {
@@ -74,7 +78,22 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
     const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
     const totalNotaCredito = diferenciaUnitaria !== null ? diferenciaUnitaria * stockViejo : null;
 
+    // Obtener stock de TODAS las sucursales desde Bsale
+    let stockPorSucursal: { sucursal: string; stock: number }[] = [];
+    let totalStock = 0;
+    try {
+      const variant = await getVariantBySku(sku);
+      if (variant) {
+        const stocks = await getStockAllOffices(variant.id);
+        stockPorSucursal = stocks.map((s) => ({ sucursal: s.officeName, stock: s.quantityAvailable }));
+        totalStock = stocks.reduce((sum, s) => sum + s.quantityAvailable, 0);
+      }
+    } catch {
+      // Si falla, dejar vacío
+    }
+
     return {
+      sku,
       producto: productName,
       primeraRcPrecioNuevo: firstNew?.document_number || null,
       fechaPrimeraRc: formatDate(firstNew?.admission_date),
@@ -88,6 +107,8 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
       stockViejo,
       diferenciaUnitaria,
       totalNotaCredito,
+      stockPorSucursal,
+      totalStock,
     };
   } finally {
     client.release();

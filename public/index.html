@@ -594,6 +594,7 @@ async function generateReport() {
     
     html += '<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
     html += `<tr><td><strong>Producto</strong></td><td>${data.producto}</td></tr>`;
+    html += `<tr><td><strong>SKU</strong></td><td>${data.sku}</td></tr>`;
     
     // Primera RC al precio nuevo
     if (data.primeraRcPrecioNuevo) {
@@ -628,6 +629,17 @@ async function generateReport() {
     html += `<tr><td>Stock Viejo</td><td>${data.stockViejo} unidades</td></tr>`;
     html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${data.diferenciaUnitaria !== null ? '$' + data.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
     html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${data.totalNotaCredito !== null ? '$' + data.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
+    
+    // Stock por sucursal
+    if (data.stockPorSucursal && data.stockPorSucursal.length > 0) {
+      html += `<tr><td><strong>Stock por Sucursal</strong></td><td>`;
+      data.stockPorSucursal.forEach(s => {
+        html += `<div>${s.sucursal}: ${s.stock} unidades</div>`;
+      });
+      html += `</td></tr>`;
+    }
+    html += `<tr><td><strong>Total Stock</strong></td><td><strong>${data.totalStock} unidades</strong></td></tr>`;
+    
     html += '</tbody></table>';
 
     div.innerHTML = html;
@@ -839,6 +851,7 @@ async function generateReportByModel() {
       html += `<strong>Variante: ${r.sku}</strong><br>`;
       html += '<table style="margin-top:8px;"><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
       html += `<tr><td><strong>Producto</strong></td><td>${r.producto}</td></tr>`;
+      html += `<tr><td><strong>SKU</strong></td><td>${r.sku}</td></tr>`;
       html += `<tr><td>Primera RC Precio Nuevo</td><td>${r.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
       html += `<tr><td>Sucursal Stock Nuevo</td><td>${r.sucursalStockNuevo || 'N/A'}</td></tr>`;
       html += `<tr><td>Stock Nuevo</td><td>${r.stockNuevo}</td></tr>`;
@@ -849,6 +862,14 @@ async function generateReportByModel() {
       html += `<tr><td>Stock Viejo</td><td>${r.stockViejo}</td></tr>`;
       html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${r.diferenciaUnitaria !== null ? '$' + r.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
       html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${r.totalNotaCredito !== null ? '$' + r.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
+      if (r.stockPorSucursal && r.stockPorSucursal.length > 0) {
+        html += `<tr><td><strong>Stock por Sucursal</strong></td><td>`;
+        r.stockPorSucursal.forEach((s: any) => {
+          html += `<div>${s.sucursal}: ${s.stock} unidades</div>`;
+        });
+        html += `</td></tr>`;
+      }
+      html += `<tr><td><strong>Total Stock</strong></td><td><strong>${r.totalStock} unidades</strong></td></tr>`;
       html += '</tbody></table>';
       html += `</div>`;
     }

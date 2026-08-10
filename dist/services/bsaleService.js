@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.bsaleFetch = bsaleFetch;
 exports.getVariantBySku = getVariantBySku;
 exports.getStock = getStock;
+exports.getStockAllOffices = getStockAllOffices;
 exports.getCosts = getCosts;
 exports.extractReceptionId = extractReceptionId;
 exports.getReceptionDocumentNumber = getReceptionDocumentNumber;
@@ -29,6 +30,26 @@ async function getVariantBySku(sku) {
 async function getStock(variantId, officeId = 2) {
     const data = await bsaleFetch(`/stocks.json?variantid=${variantId}&officeid=${officeId}&limit=5`);
     return data.items?.[0] || null;
+}
+async function getStockAllOffices(variantId) {
+    const offices = await getAllOffices();
+    const results = [];
+    await Promise.all(offices.map(async (office) => {
+        try {
+            const stock = await getStock(variantId, office.id);
+            if (stock && stock.quantityAvailable > 0) {
+                results.push({
+                    officeId: office.id,
+                    officeName: stock.office?.name || office.name,
+                    quantityAvailable: stock.quantityAvailable,
+                });
+            }
+        }
+        catch {
+            // Ignorar errores por sucursal
+        }
+    }));
+    return results;
 }
 async function getCosts(variantId) {
     return bsaleFetch(`/variants/${variantId}/costs.json`);

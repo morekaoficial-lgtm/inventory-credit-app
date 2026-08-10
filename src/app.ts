@@ -199,11 +199,13 @@ app.get('/api/report/:sku/excel', async (req, res) => {
     const result = await report.generateCreditReport(sku, newPrice);
 
     // Build worksheet
+    const stockPorSucursalText = result.stockPorSucursal.map(s => `${s.sucursal}: ${s.stock}`).join('\n');
     const wsData = [
-      ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+      ['SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
        'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
-       'Diferencia unitaria', 'Total de nota de credito'],
+       'Diferencia unitaria', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
       [
+        result.sku,
         result.producto,
         result.primeraRcPrecioNuevo || '',
         result.fechaPrimeraRc || '',
@@ -217,6 +219,8 @@ app.get('/api/report/:sku/excel', async (req, res) => {
         result.stockViejo,
         result.diferenciaUnitaria ?? '',
         result.totalNotaCredito ?? '',
+        stockPorSucursalText,
+        result.totalStock,
       ],
     ];
 
@@ -225,8 +229,8 @@ app.get('/api/report/:sku/excel', async (req, res) => {
 
     // Set column widths
     ws['!cols'] = [
-      { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+      { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
@@ -321,9 +325,9 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
     }
 
     const wsData: any[][] = [
-      ['Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+      ['SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
        'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
-       'Diferencia unitaria', 'Total de nota de credito'],
+       'Diferencia unitaria', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
     ];
 
     for (const skuRow of skuResult.rows) {
@@ -366,7 +370,22 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
       // Total from actual saved credit notes (not recalculated)
       const totalNotaCredito = parseFloat(skuRow.total_credit_notes) || 0;
 
+      // Get stock from ALL offices in Bsale
+      let stockPorSucursalText = '';
+      let totalStock = 0;
+      try {
+        const variant = await bsale.getVariantBySku(sku);
+        if (variant) {
+          const stocks = await bsale.getStockAllOffices(variant.id);
+          stockPorSucursalText = stocks.map((s: any) => `${s.officeName}: ${s.quantityAvailable}`).join('\n');
+          totalStock = stocks.reduce((sum: number, s: any) => sum + s.quantityAvailable, 0);
+        }
+      } catch {
+        // ignore
+      }
+
       wsData.push([
+        sku,
         skuRow.product_name || sku,
         firstNew?.document_number || '',
         firstNew?.admission_date ? new Date(firstNew.admission_date * 1000).toISOString().split('T')[0] : '',
@@ -380,14 +399,16 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
         stockViejo,
         diferenciaUnitaria ?? '',
         totalNotaCredito,
+        stockPorSucursalText,
+        totalStock,
       ]);
     }
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [
-      { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+      { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
     ];
     XLSX.utils.book_append_sheet(wb, ws, 'Notas de Credito');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -710,12 +731,13 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
     const wsData = [
       ['Modelo', 'SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
        'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
-       'Diferencia unitaria', 'Total de nota de credito'],
+       'Diferencia unitaria', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
     ];
 
     for (const sku of targetSkus) {
       try {
         const result = await report.generateCreditReport(sku, newPrice);
+        const stockPorSucursalText = result.stockPorSucursal.map((s: any) => `${s.sucursal}: ${s.stock}`).join('\n');
         wsData.push([
           model,
           sku,
@@ -732,6 +754,8 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
           String(result.stockViejo),
           result.diferenciaUnitaria !== null ? String(result.diferenciaUnitaria) : '',
           result.totalNotaCredito !== null ? String(result.totalNotaCredito) : '',
+          stockPorSucursalText,
+          String(result.totalStock),
         ]);
       } catch (e) {
         // Skip SKUs without receptions
@@ -749,7 +773,7 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [
       { wch: 12 }, { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 },
+      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
     ];
     XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

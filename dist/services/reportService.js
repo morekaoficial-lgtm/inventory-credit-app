@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateCreditReport = generateCreditReport;
 const database_1 = require("../config/database");
+const bsaleService_1 = require("./bsaleService");
 function formatDate(timestamp) {
     if (!timestamp)
         return null;
@@ -48,7 +49,22 @@ async function generateCreditReport(sku, newPrice) {
         const precioViejo = lastOld ? parseFloat(lastOld.original_cost) : null;
         const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
         const totalNotaCredito = diferenciaUnitaria !== null ? diferenciaUnitaria * stockViejo : null;
+        // Obtener stock de TODAS las sucursales desde Bsale
+        let stockPorSucursal = [];
+        let totalStock = 0;
+        try {
+            const variant = await (0, bsaleService_1.getVariantBySku)(sku);
+            if (variant) {
+                const stocks = await (0, bsaleService_1.getStockAllOffices)(variant.id);
+                stockPorSucursal = stocks.map((s) => ({ sucursal: s.officeName, stock: s.quantityAvailable }));
+                totalStock = stocks.reduce((sum, s) => sum + s.quantityAvailable, 0);
+            }
+        }
+        catch {
+            // Si falla, dejar vacío
+        }
         return {
+            sku,
             producto: productName,
             primeraRcPrecioNuevo: firstNew?.document_number || null,
             fechaPrimeraRc: formatDate(firstNew?.admission_date),
@@ -62,6 +78,8 @@ async function generateCreditReport(sku, newPrice) {
             stockViejo,
             diferenciaUnitaria,
             totalNotaCredito,
+            stockPorSucursal,
+            totalStock,
         };
     }
     finally {

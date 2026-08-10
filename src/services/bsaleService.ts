@@ -35,6 +35,28 @@ export async function getStock(variantId: number, officeId = 2): Promise<any | n
   return data.items?.[0] || null;
 }
 
+export async function getStockAllOffices(variantId: number): Promise<{ officeId: number; officeName: string; quantityAvailable: number }[]> {
+  const offices = await getAllOffices();
+  const results: { officeId: number; officeName: string; quantityAvailable: number }[] = [];
+  await Promise.all(
+    offices.map(async (office) => {
+      try {
+        const stock = await getStock(variantId, office.id);
+        if (stock && stock.quantityAvailable > 0) {
+          results.push({
+            officeId: office.id,
+            officeName: stock.office?.name || office.name,
+            quantityAvailable: stock.quantityAvailable,
+          });
+        }
+      } catch {
+        // Ignorar errores por sucursal
+      }
+    })
+  );
+  return results;
+}
+
 export async function getCosts(variantId: number): Promise<BsaleCostsResponse> {
   return bsaleFetch(`/variants/${variantId}/costs.json`);
 }
