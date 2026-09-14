@@ -12,6 +12,7 @@ exports.markCreditNotePaid = markCreditNotePaid;
 exports.markFolioPaid = markFolioPaid;
 exports.getCreditNoteSummary = getCreditNoteSummary;
 exports.deleteAllCreditNotes = deleteAllCreditNotes;
+exports.deleteCreditNotesByIds = deleteCreditNotesByIds;
 const database_1 = require("../config/database");
 // ============================================
 // BRAND DISCOUNT RULES
@@ -200,5 +201,10 @@ async function getCreditNoteSummary() {
 }
 async function deleteAllCreditNotes() {
     const result = await database_1.pool.query(`DELETE FROM credit_notes WHERE status = 'pending'`);
+    return result.rowCount || 0;
+}
+// Delete specific credit notes by IDs (only pending ones)
+async function deleteCreditNotesByIds(ids) {
+    const result = await database_1.pool.query(`DELETE FROM credit_notes WHERE id = ANY($1) AND status = 'pending'`, [ids]);
     return result.rowCount || 0;
 }

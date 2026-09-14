@@ -154,6 +154,11 @@ tr:hover { background: #f7fafc; }
         <button class="success" onclick="downloadAllCreditNotesExcel()">📥 Descargar Todo (Excel)</button>
         <button class="danger" onclick="deleteAllCreditNotes()" style="background:#e53e3e; margin-left:10px;">🗑️ Borrar Todas las Notas Pendientes</button>
       </div>
+      <div id="sel-delete-bar" style="display:none;align-items:center;gap:12px;background:#fff5f5;border:2px solid #e53e3e;border-radius:8px;padding:12px 16px;margin-bottom:15px;">
+        <strong style="color:#e53e3e;">☑️ <span id="sel-count">0</span> nota(s) seleccionada(s)</strong>
+        <button onclick="deleteSelectedFolios()" style="background:#e53e3e;color:white;border:none;border-radius:5px;padding:8px 16px;cursor:pointer;font-weight:bold;">🗑️ Borrar Seleccionadas</button>
+        <button onclick="selectedNoteIds.clear(); loadCreditNotes();" style="background:#cbd5e0;color:#2d3748;border:none;border-radius:5px;padding:8px 12px;cursor:pointer;">Cancelar</button>
+      </div>
       <div id="folios-summary" style="margin-bottom:15px;"></div>
       <div id="credit-list">
         <div class="loading">Cargando...</div>
@@ -474,12 +479,85 @@ async function saveCreditNotes(notes) {
   }
 }
 
+// Selection state for bulk delete
+let selectedNoteIds = new Set();
+
+function toggleFolioSel(folioKey, noteIds, checked) {
+  if (checked) {
+    noteIds.forEach(id => selectedNoteIds.add(id));
+  } else {
+    noteIds.forEach(id => selectedNoteIds.delete(id));
+  }
+  updateSelBar();
+}
+
+function updateSelBar() {
+  const bar = document.getElementById('sel-delete-bar');
+  const count = document.getElementById('sel-count');
+  if (selectedNoteIds.size > 0) {
+    bar.style.display = 'flex';
+    count.textContent = selectedNoteIds.size;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+async function deleteSelectedFolios() {
+  const n = selectedNoteIds.size;
+  if (n === 0) return;
+  if (!confirm(`¿Eliminar ${n} nota(s) seleccionada(s)?\n\nEsta acción no se puede deshacer.`)) return;
+  try {
+    const res = await fetch(API + '/credit-notes/delete-selected', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noteIds: Array.from(selectedNoteIds) })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ ${data.deleted} nota(s) eliminada(s)`);
+      selectedNoteIds.clear();
+      loadCreditNotes();
+      loadStats();
+    } else {
+      alert('Error: ' + data.error);
+    }
+  } catch (e) {
+    alert('Error de conexion');
+  }
+}
+
+async function deleteFolioNotes(folio, noteIds) {
+  if (!confirm(`¿Eliminar el folio ${folio}?\n\n${noteIds.length} nota(s) serán eliminadas. Esta acción no se puede deshacer.`)) return;
+  try {
+    const res = await fetch(API + '/credit-notes/delete-selected', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ noteIds })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ Folio ${folio}: ${data.deleted} nota(s) eliminada(s)`);
+      noteIds.forEach(id => selectedNoteIds.delete(id));
+      loadCreditNotes();
+      loadStats();
+    } else {
+      alert('Error: ' + data.error);
+    }
+  } catch (e) {
+    alert('Error de conexion');
+  }
+}
+
 async function loadCreditNotes() {
   try {
     const res = await fetch(API + '/credit-notes');
     const notes = await res.json();
     const container = document.getElementById('credit-list');
     const foliosDiv = document.getElementById('folios-summary');
+    // Limpiar seleccion: quitar IDs que ya no existen
+    const validIds = new Set(notes.map(n => n.id));
+    selectedNoteIds.forEach(id => { if (!validIds.has(id)) selectedNoteIds.delete(id); });
+    updateSelBar();
     if (notes.length === 0) {
       container.innerHTML = '<div class="alert alert-info">No hay notas por aplicar pendientes.</div>';
       foliosDiv.innerHTML = '';
@@ -499,6 +577,9 @@ async function loadCreditNotes() {
     let grandTotal = 0;
     let grandTotalDisc = 0;
     for (const [folio, items] of Object.entries(byFolio)) {
+      const folioKey = folio;
+      const noteIds = items.map(n => n.id);
+      const allChecked = noteIds.every(id => selectedNoteIds.has(id));
       let rawTotal = 0, discTotal = 0;
       let anyMoreka = false, allMoreka = true;
       for (const n of items) {
@@ -514,12 +595,16 @@ async function loadCreditNotes() {
       const brandLabel = allMoreka ? 'Moreka' : (anyMoreka ? 'Mixta' : 'Otra');
       const pctLabel = allMoreka ? '8%' : (anyMoreka ? 'Mixta' : '7%');
       folioHtml += `<div style="background:#edf2f7;border-radius:8px;padding:14px;border-left:4px solid #3182ce;">
-        <div style="font-weight:bold;font-size:1.05rem;">📋 ${folio}</div>
-        <div style="font-size:0.85rem;color:#718096;">${items.length} nota(s) · Marca: ${brandLabel} · Desc: ${pctLabel}</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" ${allChecked ? 'checked' : ''} onchange="toggleFolioSel('${folioKey}', [${noteIds.join(',')}], this.checked)" style="width:18px;height:18px;cursor:pointer;">
+          <span style="font-weight:bold;font-size:1.05rem;">📋 ${folio}</span>
+        </label>
+        <div style="font-size:0.85rem;color:#718096;margin-top:4px;">${items.length} nota(s) · Marca: ${brandLabel} · Desc: ${pctLabel}</div>
         <div style="font-size:1.1rem;margin-top:6px;">Total sin desc: <strong>$${rawTotal.toFixed(2)}</strong></div>
         <div style="font-size:1.1rem;color:#e53e3e;">Total a aplicar: <strong>$${discTotal.toFixed(2)}</strong></div>
-        <div style="margin-top:8px;">
+        <div style="margin-top:8px;display:flex;gap:8px;">
           <button class="success" onclick="payFolio('${folio}')" style="font-size:0.85rem;padding:6px 12px;">✅ Pagar Folio</button>
+          <button onclick="deleteFolioNotes('${folio}', [${noteIds.join(',')}])" style="font-size:0.85rem;padding:6px 12px;background:#e53e3e;color:white;border:none;border-radius:5px;cursor:pointer;">🗑️ Eliminar</button>
         </div>
       </div>`;
     }

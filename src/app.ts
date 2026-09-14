@@ -336,6 +336,20 @@ app.delete('/api/credit-notes', async (_req, res) => {
   }
 });
 
+// Delete selected credit notes by IDs
+app.post('/api/credit-notes/delete-selected', async (req, res) => {
+  try {
+    const { noteIds } = req.body;
+    if (!Array.isArray(noteIds) || noteIds.length === 0) {
+      return res.status(400).json({ error: 'noteIds requerido (array de IDs)' });
+    }
+    const deleted = await credit.deleteCreditNotesByIds(noteIds.map(Number));
+    res.json({ success: true, deleted, message: `Se eliminaron ${deleted} notas.` });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Download all pending credit notes as single Excel
 app.get('/api/credit-notes/excel', async (_req, res) => {
   try {

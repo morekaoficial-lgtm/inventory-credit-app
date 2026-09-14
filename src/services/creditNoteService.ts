@@ -232,3 +232,9 @@ export async function deleteAllCreditNotes(): Promise<number> {
   const result = await pool.query(`DELETE FROM credit_notes WHERE status = 'pending'`);
   return result.rowCount || 0;
 }
+
+// Delete specific credit notes by IDs (only pending ones)
+export async function deleteCreditNotesByIds(ids: number[]): Promise<number> {
+  const result = await pool.query(`DELETE FROM credit_notes WHERE id = ANY($1) AND status = 'pending'`, [ids]);
+  return result.rowCount || 0;
+}
