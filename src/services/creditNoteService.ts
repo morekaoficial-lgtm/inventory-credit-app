@@ -205,12 +205,23 @@ export async function markFolioPaid(folio: string): Promise<number> {
 }
 
 export async function getCreditNoteSummary() {
-  const pending = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM credit_notes WHERE status = 'pending'`);
+  const pending = await pool.query(`
+    SELECT 
+      COALESCE(SUM(amount), 0) as total,
+      COALESCE(SUM(amount * (1 - CASE 
+        WHEN UPPER(sku) LIKE '%MOR%' OR UPPER(product_name) LIKE '%MOREKA%' 
+        THEN ${DISCOUNT_MOREKA} ELSE ${DISCOUNT_OTHER} END)), 0) as total_with_discount
+    FROM credit_notes WHERE status = 'pending'
+  `);
   const paid = await pool.query(`SELECT COALESCE(SUM(amount), 0) as total FROM credit_notes WHERE status = 'paid'`);
   const count = await pool.query(`SELECT COUNT(*) as c FROM credit_notes WHERE status = 'pending'`);
   const folios = await pool.query(`SELECT COUNT(DISTINCT folio) as c FROM credit_notes WHERE status = 'pending'`);
+  const totalPending = parseFloat(pending.rows[0].total);
+  const totalPendingWithDiscount = parseFloat(pending.rows[0].total_with_discount);
   return {
-    totalPending: parseFloat(pending.rows[0].total),
+    totalPending,
+    totalPendingWithDiscount,
+    totalDiscountAmount: totalPending - totalPendingWithDiscount,
     totalPaid: parseFloat(paid.rows[0].total),
     countPending: parseInt(count.rows[0].c),
     foliosPending: parseInt(folios.rows[0].c),

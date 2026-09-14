@@ -88,6 +88,7 @@ tr:hover { background: #f7fafc; }
     <div class="stat-card"><div class="number" id="stat-receptions">-</div><div class="label">Recepciones</div></div>
     <div class="stat-card"><div class="number" id="stat-pending">-</div><div class="label">NC Pendientes</div></div>
     <div class="stat-card"><div class="number" id="stat-amount">-</div><div class="label">Monto Pendiente</div></div>
+    <div class="stat-card"><div class="number" id="stat-discount" style="color:#38a169;">-</div><div class="label">Descuento Aplicado</div></div>
   </div>
 
   <!-- Navigation -->
@@ -316,7 +317,8 @@ async function loadStats() {
     document.getElementById('stat-products').textContent = data.totalProducts || 0;
     document.getElementById('stat-receptions').textContent = data.totalReceptions || 0;
     document.getElementById('stat-pending').textContent = data.countPending || 0;
-    document.getElementById('stat-amount').textContent = '$' + (data.totalPending || 0).toFixed(2);
+    document.getElementById('stat-amount').textContent = '$' + (data.totalPendingWithDiscount !== undefined ? data.totalPendingWithDiscount : (data.totalPending || 0)).toFixed(2);
+    document.getElementById('stat-discount').textContent = '-$' + (data.totalDiscountAmount || 0).toFixed(2);
   } catch (e) {
     console.error('Stats error:', e);
   }
