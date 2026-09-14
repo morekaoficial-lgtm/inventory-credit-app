@@ -169,7 +169,18 @@ app.post('/api/calculate/:sku', async (req, res) => {
     if (!stockItems.length) return res.status(404).json({ error: 'No hay stock sincronizado' });
 
     const result = credit.calculateCreditNotes(stockItems, newPrice);
-    res.json({ sku, productName: stockItems[0]?.productName, newPrice, creditNotes: result.creditNotes, totalAmount: result.totalAmount, currency: 'USD' });
+    const moreka = credit.isMorekaProduct(sku, stockItems[0]?.productName);
+    res.json({
+      sku,
+      productName: stockItems[0]?.productName,
+      marca: moreka ? 'Moreka' : 'Otra',
+      discountPct: moreka ? credit.DISCOUNT_MOREKA : credit.DISCOUNT_OTHER,
+      newPrice,
+      creditNotes: result.creditNotes,
+      totalAmount: result.totalAmount,
+      totalWithDiscount: result.totalWithDiscount,
+      currency: 'USD'
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -200,24 +211,27 @@ app.get('/api/report/:sku/excel', async (req, res) => {
 
     // Build worksheet
     const stockPorSucursalText = result.stockPorSucursal.map(s => `${s.sucursal}: ${s.stock}`).join('\n');
+    const ultimasRcText = result.ultimasRcPrecioViejo.map(r =>
+      `${r.documento || 'S/INV'} | ${r.fecha || 'N/A'} | ${r.sucursal || 'N/A'}`
+    ).join('\n');
     const wsData = [
-      ['SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
-       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
-       'Diferencia unitaria', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
+      ['SKU', 'Producto', 'Marca', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+       'Ultimas 3 recepciones a precio viejo (DOC | Fecha | Sucursal)', 'Precio Viejo',
+       'Diferencia unitaria', 'Descuento %', 'Total sin descuento', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
       [
         result.sku,
         result.producto,
+        result.marca,
         result.primeraRcPrecioNuevo || '',
         result.fechaPrimeraRc || '',
         result.sucursalStockNuevo || '',
         result.stockNuevo,
         result.precioNuevo,
-        result.ultimaRcPrecioViejo || '',
-        result.fechaUltimaRc || '',
-        result.sucursalStockViejo || '',
+        ultimasRcText,
         result.precioViejo ?? '',
-        result.stockViejo,
         result.diferenciaUnitaria ?? '',
+        `${(result.descuentoPct * 100).toFixed(0)}%`,
+        result.totalSinDescuento ?? '',
         result.totalNotaCredito ?? '',
         stockPorSucursalText,
         result.totalStock,
@@ -229,8 +243,8 @@ app.get('/api/report/:sku/excel', async (req, res) => {
 
     // Set column widths
     ws['!cols'] = [
-      { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
+      { wch: 20 }, { wch: 30 }, { wch: 10 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 50 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, 'Reporte Nota Credito');
@@ -248,10 +262,30 @@ app.get('/api/report/:sku/excel', async (req, res) => {
 // Save credit notes
 app.post('/api/credit-notes', async (req, res) => {
   try {
-    const { notes, pdfId } = req.body;
+    const { notes, pdfId, folio } = req.body;
     if (!notes?.length) return res.status(400).json({ error: 'notes array requerido' });
-    await credit.saveCreditNotes(notes, pdfId);
-    res.json({ success: true, count: notes.length });
+    const finalFolio = await credit.saveCreditNotes(notes, pdfId, folio);
+    res.json({ success: true, count: notes.length, folio: finalFolio });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get pending credit notes grouped by folio
+app.get('/api/credit-notes/folios', async (_req, res) => {
+  try {
+    const folios = await credit.getPendingByFolio();
+    res.json(folios);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Mark all credit notes of a folio as paid
+app.post('/api/credit-notes/folio/:folio/pay', async (req, res) => {
+  try {
+    const updated = await credit.markFolioPaid(req.params.folio);
+    res.json({ success: true, updated, folio: req.params.folio });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -292,7 +326,6 @@ app.post('/api/credit-notes/:id/pay', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-
 // Delete all pending credit notes
 app.delete('/api/credit-notes', async (_req, res) => {
   try {
@@ -306,9 +339,10 @@ app.delete('/api/credit-notes', async (_req, res) => {
 // Download all pending credit notes as single Excel
 app.get('/api/credit-notes/excel', async (_req, res) => {
   try {
-    // Get all pending credit notes grouped by SKU with their totals
+    // Get all pending credit notes grouped by Folio + SKU with their totals
     const skuResult = await pool.query(`
       SELECT 
+        cn.folio,
         cn.sku,
         cn.new_cost,
         MAX(cn.product_name) as product_name,
@@ -316,8 +350,8 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
         SUM(cn.quantity_credited) as total_qty_credited
       FROM credit_notes cn
       WHERE cn.status = 'pending'
-      GROUP BY cn.sku, cn.new_cost
-      ORDER BY cn.sku
+      GROUP BY cn.folio, cn.sku, cn.new_cost
+      ORDER BY cn.folio DESC, cn.sku
     `);
 
     if (skuResult.rows.length === 0) {
@@ -325,14 +359,17 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
     }
 
     const wsData: any[][] = [
-      ['SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
-       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
-       'Diferencia unitaria', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
+      ['Folio', 'SKU', 'Producto', 'Marca', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+       'Ultimas 3 recepciones a precio viejo (DOC | Fecha | Sucursal)', 'Precio Viejo',
+       'Diferencia unitaria', 'Descuento %', 'Total sin descuento', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
     ];
 
     for (const skuRow of skuResult.rows) {
       const sku = skuRow.sku;
       const newPrice = parseFloat(skuRow.new_cost);
+      const moreka = credit.isMorekaProduct(sku, skuRow.product_name);
+      const marca = moreka ? 'Moreka' : 'Otra';
+      const descuentoPct = moreka ? credit.DISCOUNT_MOREKA : credit.DISCOUNT_OTHER;
 
       // Get all receptions for this SKU
       const receptionsResult = await pool.query(`
@@ -362,17 +399,22 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
       const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
       const stockNuevo = receptionsNewPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
 
-      // Last reception of stock viejo - solo con INV-
-      const lastOld = receptionsOldPriceInv.length > 0 ? receptionsOldPriceInv[receptionsOldPriceInv.length - 1] : null;
+      // Last 3 receptions of stock viejo - solo con INV-, mas reciente primero
+      const lastThreeOld = receptionsOldPriceInv.slice(-3).reverse();
+      const ultimasRcText = lastThreeOld.map((r: any) =>
+        `${r.document_number || 'S/INV'} | ${r.admission_date ? new Date(r.admission_date * 1000).toISOString().split('T')[0] : 'N/A'} | ${r.office_name || 'N/A'}`
+      ).join('\n');
       
       // Stock viejo = FULL quantity_remaining (NOT minus already_credited - for arqueo)
+      // Se usa solo para calculo interno de diferencia, ya NO se expone como columna
       const stockViejo = receptionsOldPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
 
-      const precioViejo = lastOld ? parseFloat(lastOld.original_cost) : null;
+      const precioViejo = lastThreeOld.length > 0 ? parseFloat(lastThreeOld[0].original_cost) : null;
       const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
       
       // Total from actual saved credit notes (not recalculated)
-      const totalNotaCredito = parseFloat(skuRow.total_credit_notes) || 0;
+      const totalSinDescuento = parseFloat(skuRow.total_credit_notes) || 0;
+      const totalNotaCredito = totalSinDescuento * (1 - descuentoPct);
 
       // Get stock from ALL offices in Bsale
       let stockPorSucursalText = '';
@@ -389,19 +431,20 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
       }
 
       wsData.push([
+        skuRow.folio || '',
         sku,
         skuRow.product_name || sku,
+        marca,
         firstNew?.document_number || '',
         firstNew?.admission_date ? new Date(firstNew.admission_date * 1000).toISOString().split('T')[0] : '',
         firstNew?.office_name || '',
         stockNuevo,
         newPrice,
-        lastOld?.document_number || '',
-        lastOld?.admission_date ? new Date(lastOld.admission_date * 1000).toISOString().split('T')[0] : '',
-        lastOld?.office_name || '',
+        ultimasRcText,
         precioViejo ?? '',
-        stockViejo,
         diferenciaUnitaria ?? '',
+        `${(descuentoPct * 100).toFixed(0)}%`,
+        totalSinDescuento,
         totalNotaCredito,
         stockPorSucursalText,
         totalStock,
@@ -411,10 +454,10 @@ app.get('/api/credit-notes/excel', async (_req, res) => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [
-      { wch: 20 }, { wch: 30 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
-      { wch: 28 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 18 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
+      { wch: 18 }, { wch: 20 }, { wch: 30 }, { wch: 10 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+      { wch: 50 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
     ];
-    XLSX.utils.book_append_sheet(wb, ws, 'Notas de Credito');
+    XLSX.utils.book_append_sheet(wb, ws, 'Notas por Aplicar');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
     res.setHeader('Content-Disposition', `attachment; filename="notas_credito_pendientes.xlsx"`);
@@ -733,30 +776,33 @@ app.get('/api/report-by-model/:model/excel', async (req, res) => {
 
     // Build worksheet with all variants
     const wsData = [
-      ['Modelo', 'SKU', 'Producto', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
-       'Ultima recepción a precio viejo', 'Fecha de ultima RC', 'Sucursal stock viejo', 'Precio Viejo', 'Stock Viejo',
-       'Diferencia unitaria', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
+      ['Modelo', 'SKU', 'Producto', 'Marca', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+       'Ultimas 3 recepciones a precio viejo (DOC | Fecha | Sucursal)', 'Precio Viejo',
+       'Diferencia unitaria', 'Descuento %', 'Total sin descuento', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
     ];
 
     for (const sku of targetSkus) {
       try {
         const result = await report.generateCreditReport(sku, newPrice);
         const stockPorSucursalText = result.stockPorSucursal.map((s: any) => `${s.sucursal}: ${s.stock}`).join('\n');
+        const ultimasRcText = result.ultimasRcPrecioViejo.map((r: any) =>
+          `${r.documento || 'S/INV'} | ${r.fecha || 'N/A'} | ${r.sucursal || 'N/A'}`
+        ).join('\n');
         wsData.push([
           model,
           sku,
           result.producto,
+          result.marca,
           result.primeraRcPrecioNuevo || '',
           result.fechaPrimeraRc || '',
           result.sucursalStockNuevo || '',
           String(result.stockNuevo),
           String(result.precioNuevo),
-          result.ultimaRcPrecioViejo || '',
-          result.fechaUltimaRc || '',
-          result.sucursalStockViejo || '',
+          ultimasRcText,
           result.precioViejo !== null ? String(result.precioViejo) : '',
-          String(result.stockViejo),
           result.diferenciaUnitaria !== null ? String(result.diferenciaUnitaria) : '',
+          `${(result.descuentoPct * 100).toFixed(0)}%`,
+          result.totalSinDescuento !== null ? String(result.totalSinDescuento) : '',
           result.totalNotaCredito !== null ? String(result.totalNotaCredito) : '',
           stockPorSucursalText,
           String(result.totalStock),
@@ -844,6 +890,7 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
         const variantResults: any[] = [];
         let modelTotalAmount = 0;
         let modelSavedNotes = 0;
+        let modelFolio: string | undefined = undefined;
 
         for (const sku of skus) {
           // Auto-sync if needed
@@ -858,8 +905,12 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
           const calc = credit.calculateCreditNotes(stockItems, newPrice);
 
           if (calc.creditNotes.length > 0) {
-            // AUTO-SAVE credit notes!
-            await credit.saveCreditNotes(calc.creditNotes);
+            // AUTO-SAVE credit notes! (one folio per model)
+            if (!modelFolio) {
+              modelFolio = await credit.saveCreditNotes(calc.creditNotes);
+            } else {
+              await credit.saveCreditNotes(calc.creditNotes, undefined, modelFolio);
+            }
 
             modelTotalAmount += calc.totalAmount;
             modelSavedNotes += calc.creditNotes.length;
@@ -884,6 +935,7 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
           row: i + 1,
           model,
           newPrice,
+          folio: modelFolio,
           variantsProcessed: variantResults.length,
           totalAmount: modelTotalAmount,
           savedNotes: modelSavedNotes,

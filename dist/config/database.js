@@ -84,6 +84,25 @@ async function initDatabase() {
         END IF;
       END $$;
     `);
+        // Migration: add folio to credit_notes if not exists
+        await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='credit_notes' AND column_name='folio') THEN
+          ALTER TABLE credit_notes ADD COLUMN folio TEXT;
+        END IF;
+      END $$;
+    `);
+        // Migration: add paid_at to credit_notes if not exists
+        await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='credit_notes' AND column_name='paid_at') THEN
+          ALTER TABLE credit_notes ADD COLUMN paid_at TIMESTAMP;
+        END IF;
+      END $$;
+    `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_credit_notes_folio ON credit_notes(folio)`);
         // Offices cache table
         await client.query(`
       CREATE TABLE IF NOT EXISTS offices (

@@ -1,20 +1,28 @@
 import { pool } from '../config/database';
 import { getVariantBySku, getStockAllOffices } from './bsaleService';
+import { isMorekaProduct, getDiscountPct } from './creditNoteService';
+
+export interface LastReceptionOld {
+  documento: string | null;
+  fecha: string | null;
+  sucursal: string | null;
+  costo: number;
+}
 
 export interface CreditReportRow {
   sku: string;
   producto: string;
+  marca: string;
   primeraRcPrecioNuevo: string | null;
   fechaPrimeraRc: string | null;
   sucursalStockNuevo: string | null;
   stockNuevo: number;
   precioNuevo: number;
-  ultimaRcPrecioViejo: string | null;
-  fechaUltimaRc: string | null;
-  sucursalStockViejo: string | null;
+  ultimasRcPrecioViejo: LastReceptionOld[];
   precioViejo: number | null;
-  stockViejo: number;
   diferenciaUnitaria: number | null;
+  descuentoPct: number;
+  totalSinDescuento: number | null;
   totalNotaCredito: number | null;
   stockPorSucursal: { sucursal: string; stock: number }[];
   totalStock: number;
@@ -29,7 +37,7 @@ function formatDate(timestamp: number | null): string | null {
 export async function generateCreditReport(sku: string, newPrice: number): Promise<CreditReportRow> {
   const client = await pool.connect();
   try {
-    // Traer todas las recepciones del SKU con sus créditos ya aplicados
+    // Traer todas las recepciones del SKU con sus creditos ya aplicados
     const receptionsResult = await client.query(`
       SELECT 
         r.id,
@@ -57,6 +65,10 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
       [sku]
     )).rows[0]?.product_name || sku;
 
+    const moreka = isMorekaProduct(sku, productName);
+    const marca = moreka ? 'Moreka' : 'Otra';
+    const descuentoPct = getDiscountPct(sku, productName);
+
     // Separar recepciones por precio
     const receptionsNewPrice = receptions.filter((r: any) => parseFloat(r.original_cost) === newPrice);
     const receptionsOldPrice = receptions.filter((r: any) => parseFloat(r.original_cost) > newPrice);
@@ -69,18 +81,27 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
     const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
     const stockNuevo = receptionsNewPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
 
-    // Para precio VIEJO: tomar la ULTIMA (mas nueva) con INV-
-    const lastOld = receptionsOldPriceInv.length > 0 ? receptionsOldPriceInv[receptionsOldPriceInv.length - 1] : null;
-    
+    // Para precio VIEJO: tomar las ULTIMAS 3 (mas nuevas) con INV-
+    const lastThreeOld = receptionsOldPriceInv.slice(-3).reverse(); // mas reciente primero
+
+    const ultimasRcPrecioViejo: LastReceptionOld[] = lastThreeOld.map((r: any) => ({
+      documento: r.document_number || null,
+      fecha: formatDate(r.admission_date),
+      sucursal: r.office_name || null,
+      costo: parseFloat(r.original_cost),
+    }));
+
     // Stock viejo = suma de (quantity_remaining - already_credited) de recepciones con costo > newPrice
+    // Se usa solo para el calculo interno, ya NO se expone como columna
     const stockViejo = receptionsOldPrice.reduce((sum: number, r: any) => {
       const available = parseInt(r.quantity_remaining) - parseInt(r.already_credited);
       return sum + Math.max(0, available);
     }, 0);
 
-    const precioViejo = lastOld ? parseFloat(lastOld.original_cost) : null;
+    const precioViejo = ultimasRcPrecioViejo.length > 0 ? ultimasRcPrecioViejo[0].costo : null;
     const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
-    const totalNotaCredito = diferenciaUnitaria !== null ? diferenciaUnitaria * stockViejo : null;
+    const totalSinDescuento = diferenciaUnitaria !== null ? diferenciaUnitaria * stockViejo : null;
+    const totalNotaCredito = totalSinDescuento !== null ? totalSinDescuento * (1 - descuentoPct) : null;
 
     // Obtener stock de TODAS las sucursales desde Bsale
     let stockPorSucursal: { sucursal: string; stock: number }[] = [];
@@ -93,23 +114,23 @@ export async function generateCreditReport(sku: string, newPrice: number): Promi
         totalStock = stocks.reduce((sum, s) => sum + s.quantityAvailable, 0);
       }
     } catch {
-      // Si falla, dejar vacío
+      // Si falla, dejar vacio
     }
 
     return {
       sku,
       producto: productName,
+      marca,
       primeraRcPrecioNuevo: firstNew?.document_number || null,
       fechaPrimeraRc: formatDate(firstNew?.admission_date),
       sucursalStockNuevo: firstNew?.office_name || null,
       stockNuevo,
       precioNuevo: newPrice,
-      ultimaRcPrecioViejo: lastOld?.document_number || null,
-      fechaUltimaRc: formatDate(lastOld?.admission_date),
-      sucursalStockViejo: lastOld?.office_name || null,
+      ultimasRcPrecioViejo,
       precioViejo,
-      stockViejo,
       diferenciaUnitaria,
+      descuentoPct,
+      totalSinDescuento,
       totalNotaCredito,
       stockPorSucursal,
       totalStock,

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gestion de Inventario y Notas de Credito</title>
+<title>Gestion de Inventario y Notas por Aplicar</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f7fa; color: #333; }
@@ -76,7 +76,7 @@ tr:hover { background: #f7fafc; }
 <header>
   <div class="container">
     <h1>Gestion de Inventario FIFO</h1>
-    <p>Notas de Credito por Baja de Precio — Bsale Integration</p>
+    <p>Notas por Aplicar por Baja de Precio — Bsale Integration</p>
   </div>
 </header>
 
@@ -94,7 +94,7 @@ tr:hover { background: #f7fafc; }
   <div class="nav">
     <button class="active" onclick="showSection('products')">Productos</button>
     <button onclick="showSection('sync')">Sincronizar</button>
-    <button onclick="showSection('credit')">Notas de Credito</button>
+    <button onclick="showSection('credit')">Notas por Aplicar</button>
     <button onclick="showSection('report')">Reporte NC</button>
     <button onclick="showSection('history')">Historial Pagos</button>
     <button onclick="showSection('upload')">Subir PDF</button>
@@ -148,11 +148,12 @@ tr:hover { background: #f7fafc; }
   <!-- Credit Notes Section -->
   <div id="section-credit" class="section">
     <div class="card">
-      <h2>Notas de Credito Pendientes</h2>
+      <h2>Notas por Aplicar (Pendientes)</h2>
       <div style="margin-bottom:15px;">
         <button class="success" onclick="downloadAllCreditNotesExcel()">📥 Descargar Todo (Excel)</button>
         <button class="danger" onclick="deleteAllCreditNotes()" style="background:#e53e3e; margin-left:10px;">🗑️ Borrar Todas las Notas Pendientes</button>
       </div>
+      <div id="folios-summary" style="margin-bottom:15px;"></div>
       <div id="credit-list">
         <div class="loading">Cargando...</div>
       </div>
@@ -180,7 +181,7 @@ tr:hover { background: #f7fafc; }
   <!-- Payment History Section -->
   <div id="section-history" class="section">
     <div class="card">
-      <h2>Historial de Pagos — Notas de Credito Pagadas</h2>
+      <h2>Historial de Pagos — Notas por Aplicar Pagadas</h2>
       <div id="history-list">
         <div class="loading">Cargando historial...</div>
       </div>
@@ -427,7 +428,9 @@ async function calculateCredit() {
 
     let html = `<div class="alert alert-info">
       <strong>${data.productName}</strong> — Precio nuevo: $${data.newPrice}<br>
-      <strong>Total NC: $${data.totalAmount.toFixed(2)}</strong>
+      <span style="font-size:0.9rem;">Marca: <strong>${data.marca}</strong> | Descuento: <strong>${(data.discountPct * 100).toFixed(0)}%</strong></span><br>
+      Total sin descuento: <strong>$${data.totalAmount.toFixed(2)}</strong><br>
+      <span style="font-size:1.15rem;"><strong>Total NC a aplicar: $${data.totalWithDiscount.toFixed(2)}</strong></span>
     </div>`;
 
     html += '<table><thead><tr><th>Recepcion</th><th>Costo Original</th><th>Cantidad</th><th>Diferencia</th><th>Subtotal</th></tr></thead><tbody>';
@@ -460,8 +463,8 @@ async function saveCreditNotes(notes) {
     });
     const data = await res.json();
     if (data.success) {
-      alert(`Guardadas ${data.count} notas de credito`);
-      document.getElementById('calc-result').innerHTML = '<div class="alert alert-success">Notas de credito guardadas. Ve a "Notas de Credito" para pagar.</div>';
+      alert(`Guardadas ${data.count} notas por aplicar\nFolio: ${data.folio}`);
+      document.getElementById('calc-result').innerHTML = `<div class="alert alert-success">Notas guardadas con folio <strong>${data.folio}</strong>. Ve a "Notas por Aplicar" para gestionar.</div>`;
       loadStats();
     }
   } catch (e) {
@@ -474,31 +477,95 @@ async function loadCreditNotes() {
     const res = await fetch(API + '/credit-notes');
     const notes = await res.json();
     const container = document.getElementById('credit-list');
+    const foliosDiv = document.getElementById('folios-summary');
     if (notes.length === 0) {
-      container.innerHTML = '<div class="alert alert-info">No hay notas de credito pendientes.</div>';
+      container.innerHTML = '<div class="alert alert-info">No hay notas por aplicar pendientes.</div>';
+      foliosDiv.innerHTML = '';
       return;
     }
-    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion (INV-)</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>';
+
+    // Group notes by folio
+    const byFolio = {};
     for (const n of notes) {
-      const docNumber = n.document_number ? `<strong>${n.document_number}</strong>` : `<span style="color:#e53e3e">Sin INV - Re-sync</span>`;
-      html += `<tr>
-        <td>${n.id}</td>
-        <td>${n.product_name} <br><small>${n.sku}</small></td>
-        <td>${docNumber}</td>
-        <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
-        <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
-        <td>${n.quantity_credited}</td>
-        <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
-        <td>
-          <button class="success" onclick="payCredit(${n.id})">Pagar</button>
-          <button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="margin-left:5px;">📥 Reporte</button>
-        </td>
-      </tr>`;
+      const f = n.folio || `SIN-FOLIO-${n.id}`;
+      if (!byFolio[f]) byFolio[f] = [];
+      byFolio[f].push(n);
     }
-    html += '</tbody></table>';
+
+    // Folios summary cards
+    let folioHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:15px;">';
+    let grandTotal = 0;
+    let grandTotalDisc = 0;
+    for (const [folio, items] of Object.entries(byFolio)) {
+      const rawTotal = items.reduce((s, n) => s + parseFloat(n.amount), 0);
+      const anyMoreka = items.some(n => (n.sku || '').toUpperCase().includes('MOR') || (n.product_name || '').toUpperCase().includes('MOREKA'));
+      const allMoreka = items.every(n => (n.sku || '').toUpperCase().includes('MOR') || (n.product_name || '').toUpperCase().includes('MOREKA'));
+      const pct = allMoreka ? 0.08 : (anyMoreka ? null : 0.07);
+      const discTotal = pct === null ? null : rawTotal * (1 - pct);
+      if (discTotal !== null) { grandTotal += rawTotal; grandTotalDisc += discTotal; }
+      const brandLabel = allMoreka ? 'Moreka' : (anyMoreka ? 'Mixta' : 'Otra');
+      folioHtml += `<div style="background:#edf2f7;border-radius:8px;padding:14px;border-left:4px solid #3182ce;">
+        <div style="font-weight:bold;font-size:1.05rem;">📋 ${folio}</div>
+        <div style="font-size:0.85rem;color:#718096;">${items.length} nota(s) · Marca: ${brandLabel} · Desc: ${pct !== null ? (pct*100).toFixed(0) + '%' : 'Mixta'}</div>
+        <div style="font-size:1.1rem;margin-top:6px;">Total sin desc: <strong>$${rawTotal.toFixed(2)}</strong></div>
+        ${discTotal !== null ? `<div style="font-size:1.1rem;color:#e53e3e;">Total a aplicar: <strong>$${discTotal.toFixed(2)}</strong></div>` : ''}
+        <div style="margin-top:8px;">
+          <button class="success" onclick="payFolio('${folio}')" style="font-size:0.85rem;padding:6px 12px;">✅ Pagar Folio</button>
+        </div>
+      </div>`;
+    }
+    folioHtml += '</div>';
+    folioHtml += `<div style="background:#1a365d;color:white;padding:12px 16px;border-radius:8px;margin-bottom:15px;font-size:1.1rem;">
+      💰 Total general (con descuento): <strong>$${grandTotalDisc.toFixed(2)}</strong> <span style="opacity:0.7;font-size:0.9rem;">(sin desc: $${grandTotal.toFixed(2)})</span>
+    </div>`;
+    foliosDiv.innerHTML = folioHtml;
+
+    // Detailed table grouped by folio
+    let html = '';
+    for (const [folio, items] of Object.entries(byFolio)) {
+      html += `<div style="margin-top:20px;padding:12px;background:#f7fafc;border-radius:8px;">`;
+      html += `<div style="font-weight:bold;margin-bottom:8px;font-size:1rem;">📋 Folio: ${folio} <span style="color:#718096;font-weight:normal;">(${items.length} nota(s))</span></div>`;
+      html += '<table><thead><tr><th>ID</th><th>Producto</th><th>Recepcion (INV-)</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>';
+      for (const n of items) {
+        const docNumber = n.document_number ? `<strong>${n.document_number}</strong>` : `<span style="color:#e53e3e">Sin INV - Re-sync</span>`;
+        html += `<tr>
+          <td>${n.id}</td>
+          <td>${n.product_name} <br><small>${n.sku}</small></td>
+          <td>${docNumber}</td>
+          <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
+          <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
+          <td>${n.quantity_credited}</td>
+          <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
+          <td>
+            <button class="success" onclick="payCredit(${n.id})">Pagar</button>
+            <button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="margin-left:5px;">📥 Reporte</button>
+          </td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      html += `<div style="margin-top:10px;text-align:right;"><button class="success" onclick="payFolio('${folio}')" style="padding:8px 20px;">✅ Marcar Folio ${folio} como Pagado</button></div>`;
+      html += '</div>';
+    }
     container.innerHTML = html;
   } catch (e) {
-    document.getElementById('credit-list').innerHTML = '<div class="alert alert-error">Error cargando NC</div>';
+    document.getElementById('credit-list').innerHTML = '<div class="alert alert-error">Error cargando notas</div>';
+  }
+}
+
+async function payFolio(folio) {
+  if (!confirm(`¿Marcar como PAGADO todo el folio ${folio}?\n\nTodas las notas de este folio pasarán al historial.`)) return;
+  try {
+    const res = await fetch(API + '/credit-notes/folio/' + encodeURIComponent(folio) + '/pay', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      alert(`✅ Folio ${folio}: ${data.updated} nota(s) marcada(s) como pagada(s)`);
+      loadCreditNotes();
+      loadStats();
+    } else {
+      alert('Error: ' + data.error);
+    }
+  } catch (e) {
+    alert('Error de conexion');
   }
 }
 
@@ -534,17 +601,17 @@ async function loadPaymentHistory() {
       container.innerHTML = '<div class="alert alert-info">No hay pagos realizados aun.</div>';
       return;
     }
-    let html = '<table><thead><tr><th>ID</th><th>Producto</th><th>SKU</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Fecha Pago</th><th>Acciones</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>Folio</th><th>Producto</th><th>SKU</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Fecha Pago</th><th>Acciones</th></tr></thead><tbody>';
     for (const n of notes) {
       html += `<tr>
-        <td>${n.id}</td>
+        <td><strong>${n.folio || '-'}</strong></td>
         <td>${n.product_name}</td>
         <td><code>${n.sku}</code></td>
         <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
         <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
         <td>${n.quantity_credited}</td>
         <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
-        <td>${new Date(n.paid_at).toLocaleDateString()}</td>
+        <td>${n.paid_at ? new Date(n.paid_at).toLocaleDateString() : '-'}</td>
         <td>
           <button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="margin-left:5px;">📥 Reporte</button>
         </td>
@@ -588,13 +655,14 @@ async function generateReport() {
     let html = '<div class="alert alert-success"><strong>Reporte generado</strong></div>';
     
     // Warning si faltan document_number (necesita re-sync)
-    if (!data.ultimaRcPrecioViejo && data.stockViejo > 0) {
+    if (data.ultimasRcPrecioViejo.length === 0 && data.precioViejo !== null) {
       html += '<div class="alert alert-error" style="margin-top:10px;"><strong>⚠️ Re-sincronizacion requerida:</strong> Este producto fue sincronizado antes de la actualizacion. Ve a "Sincronizar" y sincroniza de nuevo para ver los numeros de orden (INV-).</div>';
     }
     
     html += '<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
     html += `<tr><td><strong>Producto</strong></td><td>${data.producto}</td></tr>`;
     html += `<tr><td><strong>SKU</strong></td><td>${data.sku}</td></tr>`;
+    html += `<tr><td><strong>Marca</strong></td><td>${data.marca} <span style="color:#718096;font-size:0.85rem;">(descuento ${(data.descuentoPct * 100).toFixed(0)}%)</span></td></tr>`;
     
     // Primera RC al precio nuevo
     if (data.primeraRcPrecioNuevo) {
@@ -614,21 +682,27 @@ async function generateReport() {
     html += `<tr><td>Stock Nuevo</td><td>${data.stockNuevo} unidades</td></tr>`;
     html += `<tr><td>Precio Nuevo</td><td>$${data.precioNuevo.toFixed(2)}</td></tr>`;
     
-    // Ultima RC al precio viejo
-    if (data.ultimaRcPrecioViejo) {
-      html += `<tr><td>Ultima RC con Precio Viejo</td><td><strong>${data.ultimaRcPrecioViejo}</strong></td></tr>`;
-    } else if (data.stockViejo > 0) {
-      html += `<tr><td>Ultima RC con Precio Viejo</td><td><span style="color:#e53e3e">Sin numero de orden - Re-sincronizar</span></td></tr>`;
+    // ULTIMAS 3 recepciones al precio viejo (con sucursal)
+    if (data.ultimasRcPrecioViejo && data.ultimasRcPrecioViejo.length > 0) {
+      html += `<tr><td><strong>Ultimas ${data.ultimasRcPrecioViejo.length} recepciones a precio viejo</strong></td><td>`;
+      data.ultimasRcPrecioViejo.forEach((r, idx) => {
+        html += `<div style="margin-bottom:6px;padding:6px;background:#fff;border-radius:4px;border-left:3px solid #e53e3e;">
+          <strong>${idx + 1}. ${r.documento || 'Sin INV'}</strong><br>
+          <span style="font-size:0.85rem;">Fecha: ${r.fecha || 'N/A'} | Sucursal: ${r.sucursal || 'N/A'} | Costo: $${r.costo.toFixed(2)}</span>
+        </div>`;
+      });
+      html += `</td></tr>`;
+    } else if (data.precioViejo !== null) {
+      html += `<tr><td>Ultimas recepciones a precio viejo</td><td><span style="color:#e53e3e">Sin numeros de orden - Re-sincronizar</span></td></tr>`;
     } else {
-      html += `<tr><td>Ultima RC con Precio Viejo</td><td><em>No hay stock al precio viejo</em></td></tr>`;
+      html += `<tr><td>Ultimas recepciones a precio viejo</td><td><em>No hay stock al precio viejo</em></td></tr>`;
     }
     
-    html += `<tr><td>Fecha Ultima RC</td><td>${data.fechaUltimaRc || 'N/A'}</td></tr>`;
-    html += `<tr><td>Sucursal Stock Viejo</td><td>${data.sucursalStockViejo || 'N/A'}</td></tr>`;
     html += `<tr><td>Precio Viejo</td><td>${data.precioViejo !== null ? '$' + data.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
-    html += `<tr><td>Stock Viejo</td><td>${data.stockViejo} unidades</td></tr>`;
     html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${data.diferenciaUnitaria !== null ? '$' + data.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
-    html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${data.totalNotaCredito !== null ? '$' + data.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
+    html += `<tr><td>Descuento aplicado</td><td>${(data.descuentoPct * 100).toFixed(0)}% (${data.marca})</td></tr>`;
+    html += `<tr><td>Total sin descuento</td><td>${data.totalSinDescuento !== null ? '$' + data.totalSinDescuento.toFixed(2) : 'N/A'}</td></tr>`;
+    html += `<tr><td><strong>Total Nota por Aplicar</strong></td><td class="credit-positive"><strong>${data.totalNotaCredito !== null ? '$' + data.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
     
     // Stock por sucursal
     if (data.stockPorSucursal && data.stockPorSucursal.length > 0) {
@@ -852,16 +926,26 @@ async function generateReportByModel() {
       html += '<table style="margin-top:8px;"><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>';
       html += `<tr><td><strong>Producto</strong></td><td>${r.producto}</td></tr>`;
       html += `<tr><td><strong>SKU</strong></td><td>${r.sku}</td></tr>`;
+      html += `<tr><td><strong>Marca</strong></td><td>${r.marca} <span style="color:#718096;font-size:0.85rem;">(descuento ${(r.descuentoPct * 100).toFixed(0)}%)</span></td></tr>`;
       html += `<tr><td>Primera RC Precio Nuevo</td><td>${r.primeraRcPrecioNuevo || 'N/A'}</td></tr>`;
       html += `<tr><td>Sucursal Stock Nuevo</td><td>${r.sucursalStockNuevo || 'N/A'}</td></tr>`;
       html += `<tr><td>Stock Nuevo</td><td>${r.stockNuevo}</td></tr>`;
       html += `<tr><td>Precio Nuevo</td><td>$${r.precioNuevo.toFixed(2)}</td></tr>`;
-      html += `<tr><td>Ultima RC Precio Viejo</td><td>${r.ultimaRcPrecioViejo || 'N/A'}</td></tr>`;
-      html += `<tr><td>Sucursal Stock Viejo</td><td>${r.sucursalStockViejo || 'N/A'}</td></tr>`;
+      if (r.ultimasRcPrecioViejo && r.ultimasRcPrecioViejo.length > 0) {
+        html += `<tr><td><strong>Ultimas ${r.ultimasRcPrecioViejo.length} RC precio viejo</strong></td><td>`;
+        r.ultimasRcPrecioViejo.forEach((rc, idx) => {
+          html += `<div style="margin-bottom:4px;padding:4px;background:#fff;border-radius:4px;border-left:3px solid #e53e3e;font-size:0.85rem;">
+            <strong>${idx + 1}. ${rc.documento || 'Sin INV'}</strong> — ${rc.fecha || 'N/A'} — ${rc.sucursal || 'N/A'} — $${rc.costo.toFixed(2)}
+          </div>`;
+        });
+        html += `</td></tr>`;
+      } else {
+        html += `<tr><td>Ultimas RC Precio Viejo</td><td>N/A</td></tr>`;
+      }
       html += `<tr><td>Precio Viejo</td><td>${r.precioViejo !== null ? '$' + r.precioViejo.toFixed(2) : 'N/A'}</td></tr>`;
-      html += `<tr><td>Stock Viejo</td><td>${r.stockViejo}</td></tr>`;
       html += `<tr><td>Diferencia Unitaria</td><td class="credit-positive">${r.diferenciaUnitaria !== null ? '$' + r.diferenciaUnitaria.toFixed(2) : 'N/A'}</td></tr>`;
-      html += `<tr><td><strong>Total Nota de Credito</strong></td><td class="credit-positive"><strong>${r.totalNotaCredito !== null ? '$' + r.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
+      html += `<tr><td>Total sin descuento</td><td>${r.totalSinDescuento !== null ? '$' + r.totalSinDescuento.toFixed(2) : 'N/A'}</td></tr>`;
+      html += `<tr><td><strong>Total Nota por Aplicar</strong></td><td class="credit-positive"><strong>${r.totalNotaCredito !== null ? '$' + r.totalNotaCredito.toFixed(2) : 'N/A'}</strong></td></tr>`;
       if (r.stockPorSucursal && r.stockPorSucursal.length > 0) {
         html += `<tr><td><strong>Stock por Sucursal</strong></td><td>`;
         r.stockPorSucursal.forEach(s => {

@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateCreditReport = generateCreditReport;
 const database_1 = require("../config/database");
 const bsaleService_1 = require("./bsaleService");
+const creditNoteService_1 = require("./creditNoteService");
 function formatDate(timestamp) {
     if (!timestamp)
         return null;
@@ -12,7 +13,7 @@ function formatDate(timestamp) {
 async function generateCreditReport(sku, newPrice) {
     const client = await database_1.pool.connect();
     try {
-        // Traer todas las recepciones del SKU con sus créditos ya aplicados
+        // Traer todas las recepciones del SKU con sus creditos ya aplicados
         const receptionsResult = await client.query(`
       SELECT 
         r.id,
@@ -33,6 +34,9 @@ async function generateCreditReport(sku, newPrice) {
             throw new Error('No hay recepciones sincronizadas para este SKU');
         }
         const productName = (await client.query('SELECT product_name FROM receptions WHERE sku = $1 LIMIT 1', [sku])).rows[0]?.product_name || sku;
+        const moreka = (0, creditNoteService_1.isMorekaProduct)(sku, productName);
+        const marca = moreka ? 'Moreka' : 'Otra';
+        const descuentoPct = (0, creditNoteService_1.getDiscountPct)(sku, productName);
         // Separar recepciones por precio
         const receptionsNewPrice = receptions.filter((r) => parseFloat(r.original_cost) === newPrice);
         const receptionsOldPrice = receptions.filter((r) => parseFloat(r.original_cost) > newPrice);
@@ -42,16 +46,24 @@ async function generateCreditReport(sku, newPrice) {
         // Para precio NUEVO: tomar la PRIMERA (mas antigua) con INV-
         const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
         const stockNuevo = receptionsNewPrice.reduce((sum, r) => sum + parseInt(r.quantity_remaining), 0);
-        // Para precio VIEJO: tomar la ULTIMA (mas nueva) con INV-
-        const lastOld = receptionsOldPriceInv.length > 0 ? receptionsOldPriceInv[receptionsOldPriceInv.length - 1] : null;
+        // Para precio VIEJO: tomar las ULTIMAS 3 (mas nuevas) con INV-
+        const lastThreeOld = receptionsOldPriceInv.slice(-3).reverse(); // mas reciente primero
+        const ultimasRcPrecioViejo = lastThreeOld.map((r) => ({
+            documento: r.document_number || null,
+            fecha: formatDate(r.admission_date),
+            sucursal: r.office_name || null,
+            costo: parseFloat(r.original_cost),
+        }));
         // Stock viejo = suma de (quantity_remaining - already_credited) de recepciones con costo > newPrice
+        // Se usa solo para el calculo interno, ya NO se expone como columna
         const stockViejo = receptionsOldPrice.reduce((sum, r) => {
             const available = parseInt(r.quantity_remaining) - parseInt(r.already_credited);
             return sum + Math.max(0, available);
         }, 0);
-        const precioViejo = lastOld ? parseFloat(lastOld.original_cost) : null;
+        const precioViejo = ultimasRcPrecioViejo.length > 0 ? ultimasRcPrecioViejo[0].costo : null;
         const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
-        const totalNotaCredito = diferenciaUnitaria !== null ? diferenciaUnitaria * stockViejo : null;
+        const totalSinDescuento = diferenciaUnitaria !== null ? diferenciaUnitaria * stockViejo : null;
+        const totalNotaCredito = totalSinDescuento !== null ? totalSinDescuento * (1 - descuentoPct) : null;
         // Obtener stock de TODAS las sucursales desde Bsale
         let stockPorSucursal = [];
         let totalStock = 0;
@@ -64,22 +76,22 @@ async function generateCreditReport(sku, newPrice) {
             }
         }
         catch {
-            // Si falla, dejar vacío
+            // Si falla, dejar vacio
         }
         return {
             sku,
             producto: productName,
+            marca,
             primeraRcPrecioNuevo: firstNew?.document_number || null,
             fechaPrimeraRc: formatDate(firstNew?.admission_date),
             sucursalStockNuevo: firstNew?.office_name || null,
             stockNuevo,
             precioNuevo: newPrice,
-            ultimaRcPrecioViejo: lastOld?.document_number || null,
-            fechaUltimaRc: formatDate(lastOld?.admission_date),
-            sucursalStockViejo: lastOld?.office_name || null,
+            ultimasRcPrecioViejo,
             precioViejo,
-            stockViejo,
             diferenciaUnitaria,
+            descuentoPct,
+            totalSinDescuento,
             totalNotaCredito,
             stockPorSucursal,
             totalStock,
