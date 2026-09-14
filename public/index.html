@@ -497,18 +497,25 @@ async function loadCreditNotes() {
     let grandTotal = 0;
     let grandTotalDisc = 0;
     for (const [folio, items] of Object.entries(byFolio)) {
-      const rawTotal = items.reduce((s, n) => s + parseFloat(n.amount), 0);
-      const anyMoreka = items.some(n => (n.sku || '').toUpperCase().includes('MOR') || (n.product_name || '').toUpperCase().includes('MOREKA'));
-      const allMoreka = items.every(n => (n.sku || '').toUpperCase().includes('MOR') || (n.product_name || '').toUpperCase().includes('MOREKA'));
-      const pct = allMoreka ? 0.08 : (anyMoreka ? null : 0.07);
-      const discTotal = pct === null ? null : rawTotal * (1 - pct);
-      if (discTotal !== null) { grandTotal += rawTotal; grandTotalDisc += discTotal; }
+      let rawTotal = 0, discTotal = 0;
+      let anyMoreka = false, allMoreka = true;
+      for (const n of items) {
+        const amt = parseFloat(n.amount);
+        rawTotal += amt;
+        const isMor = (n.sku || '').toUpperCase().includes('MOR') || (n.product_name || '').toUpperCase().includes('MOREKA');
+        anyMoreka = anyMoreka || isMor;
+        allMoreka = allMoreka && isMor;
+        discTotal += amt * (1 - (isMor ? 0.08 : 0.07));
+      }
+      grandTotal += rawTotal;
+      grandTotalDisc += discTotal;
       const brandLabel = allMoreka ? 'Moreka' : (anyMoreka ? 'Mixta' : 'Otra');
+      const pctLabel = allMoreka ? '8%' : (anyMoreka ? 'Mixta' : '7%');
       folioHtml += `<div style="background:#edf2f7;border-radius:8px;padding:14px;border-left:4px solid #3182ce;">
         <div style="font-weight:bold;font-size:1.05rem;">📋 ${folio}</div>
-        <div style="font-size:0.85rem;color:#718096;">${items.length} nota(s) · Marca: ${brandLabel} · Desc: ${pct !== null ? (pct*100).toFixed(0) + '%' : 'Mixta'}</div>
+        <div style="font-size:0.85rem;color:#718096;">${items.length} nota(s) · Marca: ${brandLabel} · Desc: ${pctLabel}</div>
         <div style="font-size:1.1rem;margin-top:6px;">Total sin desc: <strong>$${rawTotal.toFixed(2)}</strong></div>
-        ${discTotal !== null ? `<div style="font-size:1.1rem;color:#e53e3e;">Total a aplicar: <strong>$${discTotal.toFixed(2)}</strong></div>` : ''}
+        <div style="font-size:1.1rem;color:#e53e3e;">Total a aplicar: <strong>$${discTotal.toFixed(2)}</strong></div>
         <div style="margin-top:8px;">
           <button class="success" onclick="payFolio('${folio}')" style="font-size:0.85rem;padding:6px 12px;">✅ Pagar Folio</button>
         </div>

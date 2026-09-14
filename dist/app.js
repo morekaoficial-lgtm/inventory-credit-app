@@ -830,6 +830,8 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
         const errors = [];
         let totalSavedNotes = 0;
         let totalSavedAmount = 0;
+        // UN SOLO folio para todo el lote: representa la nota de credito completa
+        const batchFolio = await credit.saveCreditNotes([], undefined);
         for (let i = dataStart; i < rows.length; i++) {
             const row = rows[i];
             if (!row || row.length < 2)
@@ -850,7 +852,6 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
                 const variantResults = [];
                 let modelTotalAmount = 0;
                 let modelSavedNotes = 0;
-                let modelFolio = undefined;
                 for (const sku of skus) {
                     // Auto-sync if needed
                     const existing = await database_1.pool.query('SELECT 1 FROM receptions WHERE sku = $1 LIMIT 1', [sku]);
@@ -862,13 +863,8 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
                         continue;
                     const calc = credit.calculateCreditNotes(stockItems, newPrice);
                     if (calc.creditNotes.length > 0) {
-                        // AUTO-SAVE credit notes! (one folio per model)
-                        if (!modelFolio) {
-                            modelFolio = await credit.saveCreditNotes(calc.creditNotes);
-                        }
-                        else {
-                            await credit.saveCreditNotes(calc.creditNotes, undefined, modelFolio);
-                        }
+                        // AUTO-SAVE: todas las notas del lote comparten el mismo folio
+                        await credit.saveCreditNotes(calc.creditNotes, undefined, batchFolio);
                         modelTotalAmount += calc.totalAmount;
                         modelSavedNotes += calc.creditNotes.length;
                         totalSavedAmount += calc.totalAmount;
@@ -889,7 +885,7 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
                     row: i + 1,
                     model,
                     newPrice,
-                    folio: modelFolio,
+                    folio: batchFolio,
                     variantsProcessed: variantResults.length,
                     totalAmount: modelTotalAmount,
                     savedNotes: modelSavedNotes,
@@ -902,6 +898,7 @@ app.post('/api/bulk-calculate', upload.single('file'), async (req, res) => {
         }
         res.json({
             success: true,
+            folio: batchFolio,
             processed: results.length,
             totalSavedNotes,
             totalSavedAmount,
