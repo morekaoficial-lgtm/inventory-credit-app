@@ -351,134 +351,121 @@ app.post('/api/credit-notes/delete-selected', async (req, res) => {
 });
 
 // Download all pending credit notes as single Excel
+// Build Excel for credit notes filtered by status and/or folio
+async function buildCreditNotesExcel(status: 'pending' | 'paid' | null, folio?: string): Promise<Buffer> {
+  const conditions: string[] = [];
+  const params: any[] = [];
+  if (status) { params.push(status); conditions.push(`cn.status = $${params.length}`); }
+  if (folio) { params.push(folio); conditions.push(`cn.folio = $${params.length}`); }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const skuResult = await pool.query(`
+    SELECT 
+      cn.folio,
+      cn.sku,
+      cn.new_cost,
+      MAX(cn.product_name) as product_name,
+      SUM(cn.amount) as total_credit_notes,
+      SUM(cn.quantity_credited) as total_qty_credited
+    FROM credit_notes cn
+    ${where}
+    GROUP BY cn.folio, cn.sku, cn.new_cost
+    ORDER BY cn.folio DESC, cn.sku
+  `, params);
+
+  if (skuResult.rows.length === 0) {
+    throw new Error('No hay notas de credito para exportar');
+  }
+
+  const wsData: any[][] = [
+    ['Folio', 'SKU', 'Producto', 'Marca', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
+     'Ultimas 3 recepciones a precio viejo (DOC | Fecha | Sucursal)', 'Precio Viejo',
+     'Diferencia unitaria', 'Descuento %', 'Total sin descuento', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
+  ];
+
+  for (const skuRow of skuResult.rows) {
+    const sku = skuRow.sku;
+    const newPrice = parseFloat(skuRow.new_cost);
+    const moreka = credit.isMorekaProduct(sku, skuRow.product_name);
+    const marca = moreka ? 'Moreka' : 'Otra';
+    const descuentoPct = moreka ? credit.DISCOUNT_MOREKA : credit.DISCOUNT_OTHER;
+
+    const receptionsResult = await pool.query(`
+      SELECT r.id, r.document_number, r.admission_date, r.original_cost, r.quantity_remaining, r.office_name
+      FROM receptions r WHERE r.sku = $1 ORDER BY r.admission_date ASC
+    `, [sku]);
+
+    const receptions = receptionsResult.rows;
+    const receptionsNewPrice = receptions.filter((r: any) => parseFloat(r.original_cost) === newPrice);
+    const receptionsOldPrice = receptions.filter((r: any) => parseFloat(r.original_cost) > newPrice);
+    const receptionsNewPriceInv = receptionsNewPrice.filter((r: any) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
+    const receptionsOldPriceInv = receptionsOldPrice.filter((r: any) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
+
+    const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
+    const stockNuevo = receptionsNewPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
+    const lastThreeOld = receptionsOldPriceInv.slice(-3).reverse();
+    const ultimasRcText = lastThreeOld.map((r: any) =>
+      `${r.document_number || 'S/INV'} | ${r.admission_date ? new Date(r.admission_date * 1000).toISOString().split('T')[0] : 'N/A'} | ${r.office_name || 'N/A'}`
+    ).join('\n');
+
+    const precioViejo = lastThreeOld.length > 0 ? parseFloat(lastThreeOld[0].original_cost) : null;
+    const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
+
+    const totalSinDescuento = parseFloat(skuRow.total_credit_notes) || 0;
+    const totalNotaCredito = totalSinDescuento * (1 - descuentoPct);
+
+    let stockPorSucursalText = '';
+    let totalStock = 0;
+    try {
+      const variant = await bsale.getVariantBySku(sku);
+      if (variant) {
+        const stocks = await bsale.getStockAllOffices(variant.id);
+        stockPorSucursalText = stocks.map((s: any) => `${s.officeName}: ${s.quantityAvailable}`).join('\n');
+        totalStock = stocks.reduce((sum: number, s: any) => sum + s.quantityAvailable, 0);
+      }
+    } catch { /* ignore */ }
+
+    wsData.push([
+      skuRow.folio || '', sku, skuRow.product_name || sku, marca,
+      firstNew?.document_number || '',
+      firstNew?.admission_date ? new Date(firstNew.admission_date * 1000).toISOString().split('T')[0] : '',
+      firstNew?.office_name || '',
+      stockNuevo, newPrice, ultimasRcText, precioViejo ?? '', diferenciaUnitaria ?? '',
+      `${(descuentoPct * 100).toFixed(0)}%`,
+      totalSinDescuento, totalNotaCredito, stockPorSucursalText, totalStock,
+    ]);
+  }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = [
+    { wch: 18 }, { wch: 20 }, { wch: 30 }, { wch: 10 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
+    { wch: 50 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, 'Notas por Aplicar');
+  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}
+
 app.get('/api/credit-notes/excel', async (_req, res) => {
   try {
-    // Get all pending credit notes grouped by Folio + SKU with their totals
-    const skuResult = await pool.query(`
-      SELECT 
-        cn.folio,
-        cn.sku,
-        cn.new_cost,
-        MAX(cn.product_name) as product_name,
-        SUM(cn.amount) as total_credit_notes,
-        SUM(cn.quantity_credited) as total_qty_credited
-      FROM credit_notes cn
-      WHERE cn.status = 'pending'
-      GROUP BY cn.folio, cn.sku, cn.new_cost
-      ORDER BY cn.folio DESC, cn.sku
-    `);
-
-    if (skuResult.rows.length === 0) {
-      return res.status(404).json({ error: 'No hay notas de credito pendientes' });
-    }
-
-    const wsData: any[][] = [
-      ['Folio', 'SKU', 'Producto', 'Marca', 'Primera RC con precio Nuevo', 'Fecha primera RC', 'Sucursal stock nuevo', 'Stock Nuevo', 'Precio nuevo',
-       'Ultimas 3 recepciones a precio viejo (DOC | Fecha | Sucursal)', 'Precio Viejo',
-       'Diferencia unitaria', 'Descuento %', 'Total sin descuento', 'Total de nota de credito', 'Stock por Sucursal', 'Total Stock'],
-    ];
-
-    for (const skuRow of skuResult.rows) {
-      const sku = skuRow.sku;
-      const newPrice = parseFloat(skuRow.new_cost);
-      const moreka = credit.isMorekaProduct(sku, skuRow.product_name);
-      const marca = moreka ? 'Moreka' : 'Otra';
-      const descuentoPct = moreka ? credit.DISCOUNT_MOREKA : credit.DISCOUNT_OTHER;
-
-      // Get all receptions for this SKU
-      const receptionsResult = await pool.query(`
-        SELECT 
-          r.id,
-          r.document_number,
-          r.admission_date,
-          r.original_cost,
-          r.quantity_remaining,
-          r.office_name
-        FROM receptions r
-        WHERE r.sku = $1
-        ORDER BY r.admission_date ASC
-      `, [sku]);
-
-      const receptions = receptionsResult.rows;
-
-      // Separate by price
-      const receptionsNewPrice = receptions.filter((r: any) => parseFloat(r.original_cost) === newPrice);
-      const receptionsOldPrice = receptions.filter((r: any) => parseFloat(r.original_cost) > newPrice);
-
-      // Solo recepciones con documento INV- (recepcion formal)
-      const receptionsNewPriceInv = receptionsNewPrice.filter((r: any) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
-      const receptionsOldPriceInv = receptionsOldPrice.filter((r: any) => r.document_number && r.document_number.toUpperCase().startsWith('INV-'));
-
-      // First reception of stock nuevo (for arqueo) - solo con INV-
-      const firstNew = receptionsNewPriceInv.length > 0 ? receptionsNewPriceInv[0] : null;
-      const stockNuevo = receptionsNewPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
-
-      // Last 3 receptions of stock viejo - solo con INV-, mas reciente primero
-      const lastThreeOld = receptionsOldPriceInv.slice(-3).reverse();
-      const ultimasRcText = lastThreeOld.map((r: any) =>
-        `${r.document_number || 'S/INV'} | ${r.admission_date ? new Date(r.admission_date * 1000).toISOString().split('T')[0] : 'N/A'} | ${r.office_name || 'N/A'}`
-      ).join('\n');
-      
-      // Stock viejo = FULL quantity_remaining (NOT minus already_credited - for arqueo)
-      // Se usa solo para calculo interno de diferencia, ya NO se expone como columna
-      const stockViejo = receptionsOldPrice.reduce((sum: number, r: any) => sum + parseInt(r.quantity_remaining), 0);
-
-      const precioViejo = lastThreeOld.length > 0 ? parseFloat(lastThreeOld[0].original_cost) : null;
-      const diferenciaUnitaria = precioViejo !== null ? precioViejo - newPrice : null;
-      
-      // Total from actual saved credit notes (not recalculated)
-      const totalSinDescuento = parseFloat(skuRow.total_credit_notes) || 0;
-      const totalNotaCredito = totalSinDescuento * (1 - descuentoPct);
-
-      // Get stock from ALL offices in Bsale
-      let stockPorSucursalText = '';
-      let totalStock = 0;
-      try {
-        const variant = await bsale.getVariantBySku(sku);
-        if (variant) {
-          const stocks = await bsale.getStockAllOffices(variant.id);
-          stockPorSucursalText = stocks.map((s: any) => `${s.officeName}: ${s.quantityAvailable}`).join('\n');
-          totalStock = stocks.reduce((sum: number, s: any) => sum + s.quantityAvailable, 0);
-        }
-      } catch {
-        // ignore
-      }
-
-      wsData.push([
-        skuRow.folio || '',
-        sku,
-        skuRow.product_name || sku,
-        marca,
-        firstNew?.document_number || '',
-        firstNew?.admission_date ? new Date(firstNew.admission_date * 1000).toISOString().split('T')[0] : '',
-        firstNew?.office_name || '',
-        stockNuevo,
-        newPrice,
-        ultimasRcText,
-        precioViejo ?? '',
-        diferenciaUnitaria ?? '',
-        `${(descuentoPct * 100).toFixed(0)}%`,
-        totalSinDescuento,
-        totalNotaCredito,
-        stockPorSucursalText,
-        totalStock,
-      ]);
-    }
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [
-      { wch: 18 }, { wch: 20 }, { wch: 30 }, { wch: 10 }, { wch: 25 }, { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 12 },
-      { wch: 50 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 35 }, { wch: 12 },
-    ];
-    XLSX.utils.book_append_sheet(wb, ws, 'Notas por Aplicar');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
+    const buf = await buildCreditNotesExcel('pending');
     res.setHeader('Content-Disposition', `attachment; filename="notas_credito_pendientes.xlsx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.status(404).json({ error: e.message });
+  }
+});
+
+// Download Excel for a specific folio (works for paid history too)
+app.get('/api/credit-notes/folio/:folio/excel', async (req, res) => {
+  try {
+    const buf = await buildCreditNotesExcel(null, req.params.folio);
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.folio}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (e: any) {
+    res.status(404).json({ error: e.message });
   }
 });
 

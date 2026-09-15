@@ -686,6 +686,16 @@ async function deleteAllCreditNotes() {
   }
 }
 
+function toggleFolioDetail(folioKey) {
+  const det = document.getElementById('det-' + folioKey);
+  if (det) det.style.display = det.style.display === 'none' ? 'block' : 'none';
+}
+
+function downloadFolioExcel(folio) {
+  const url = API + '/credit-notes/folio/' + encodeURIComponent(folio) + '/excel';
+  window.open(url, '_blank');
+}
+
 async function loadPaymentHistory() {
   try {
     const res = await fetch(API + '/credit-notes/paid');
@@ -695,23 +705,74 @@ async function loadPaymentHistory() {
       container.innerHTML = '<div class="alert alert-info">No hay pagos realizados aun.</div>';
       return;
     }
-    let html = '<table><thead><tr><th>Folio</th><th>Producto</th><th>SKU</th><th>Costo Antiguo</th><th>Costo Nuevo</th><th>Cantidad</th><th>Monto</th><th>Fecha Pago</th><th>Acciones</th></tr></thead><tbody>';
+
+    // Group by folio
+    const byFolio = {};
     for (const n of notes) {
-      html += `<tr>
-        <td><strong>${n.folio || '-'}</strong></td>
-        <td>${n.product_name}</td>
-        <td><code>${n.sku}</code></td>
-        <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
-        <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
-        <td>${n.quantity_credited}</td>
-        <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
-        <td>${n.paid_at ? new Date(n.paid_at).toLocaleDateString() : '-'}</td>
-        <td>
-          <button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="margin-left:5px;">📥 Reporte</button>
-        </td>
-      </tr>`;
+      const f = n.folio || `SIN-FOLIO-${n.id}`;
+      if (!byFolio[f]) byFolio[f] = [];
+      byFolio[f].push(n);
     }
-    html += '</tbody></table>';
+
+    let grandTotal = 0, grandDisc = 0;
+    let html = '';
+    for (const [folio, items] of Object.entries(byFolio)) {
+      const folioKey = folio.replace(/[^a-zA-Z0-9]/g, '_');
+      let rawTotal = 0, discTotal = 0;
+      let anyMoreka = false, allMoreka = true;
+      let paidDate = '';
+      for (const n of items) {
+        const amt = parseFloat(n.amount);
+        rawTotal += amt;
+        const isMor = (n.sku || '').toUpperCase().includes('MOR') || (n.product_name || '').toUpperCase().includes('MOREKA');
+        anyMoreka = anyMoreka || isMor;
+        allMoreka = allMoreka && isMor;
+        discTotal += amt * (1 - (isMor ? 0.08 : 0.07));
+        if (n.paid_at) paidDate = new Date(n.paid_at).toLocaleDateString();
+      }
+      grandTotal += rawTotal;
+      grandDisc += discTotal;
+      const brandLabel = allMoreka ? 'Moreka' : (anyMoreka ? 'Mixta' : 'Otra');
+
+      html += `<div style="background:#f0fff4;border:1px solid #c6f6d5;border-radius:8px;padding:14px;margin-bottom:12px;">`;
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">`;
+      html += `<div>`;
+      html += `<div style="font-weight:bold;font-size:1.1rem;color:#22543d;">✅ ${folio}</div>`;
+      html += `<div style="font-size:0.85rem;color:#718096;">${items.length} nota(s) · Marca: ${brandLabel} · Pagado: ${paidDate || 'N/A'}</div>`;
+      html += `</div>`;
+      html += `<div style="text-align:right;">`;
+      html += `<div style="font-size:0.9rem;color:#718096;">Sin desc: <strong>$${rawTotal.toFixed(2)}</strong></div>`;
+      html += `<div style="font-size:1.15rem;color:#22543d;font-weight:bold;">Total aplicado: $${discTotal.toFixed(2)}</div>`;
+      html += `</div>`;
+      html += `</div>`;
+      html += `<div style="margin-top:10px;display:flex;gap:8px;">`;
+      html += `<button onclick="toggleFolioDetail('${folioKey}')" style="font-size:0.85rem;padding:6px 12px;">📂 Ver productos</button>`;
+      html += `<button onclick="downloadFolioExcel('${folio}')" style="font-size:0.85rem;padding:6px 12px;background:#2b6cb0;color:white;border:none;border-radius:5px;cursor:pointer;">📥 Descargar Excel</button>`;
+      html += `</div>`;
+
+      // Detail table (hidden by default)
+      html += `<div id="det-${folioKey}" style="display:none;margin-top:12px;">`;
+      html += '<table style="margin:0;"><thead><tr><th>Producto</th><th>SKU</th><th>Costo Ant.</th><th>Costo Nuevo</th><th>Cant.</th><th>Monto</th><th>Reporte</th></tr></thead><tbody>';
+      for (const n of items) {
+        html += `<tr>
+          <td>${n.product_name}</td>
+          <td><code>${n.sku}</code></td>
+          <td>$${parseFloat(n.old_cost).toFixed(2)}</td>
+          <td>$${parseFloat(n.new_cost).toFixed(2)}</td>
+          <td>${n.quantity_credited}</td>
+          <td class="credit-positive">$${parseFloat(n.amount).toFixed(2)}</td>
+          <td><button onclick="downloadReport('${n.sku}', ${n.new_cost})" style="font-size:0.8rem;padding:4px 8px;">📥</button></td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      html += '</div>';
+      html += '</div>';
+    }
+
+    html += `<div style="background:#22543d;color:white;padding:12px 16px;border-radius:8px;margin-top:10px;font-size:1.05rem;text-align:right;">
+      Total historial pagado: <strong>$${grandDisc.toFixed(2)}</strong> <span style="opacity:0.7;font-size:0.9rem;">(sin desc: $${grandTotal.toFixed(2)})</span>
+    </div>`;
+
     container.innerHTML = html;
   } catch (e) {
     document.getElementById('history-list').innerHTML = '<div class="alert alert-error">Error cargando historial</div>';
